@@ -34,8 +34,8 @@ calculation engine. Tree data, pathing rules, art and calculations come from
 
 ### Calculations (Path of Building's engine)
 
-The app runs Path of Building's Lua program, unmodified, inside the app (LuaJIT, the same version
-PoB ships), so the numbers are PoB's. The screens follow PoB's tabs:
+The app runs Path of Building's Lua program inside the app (LuaJIT, the same version PoB ships),
+so the numbers are PoB's. The screens follow PoB's tabs:
 
 - **Tree**: key numbers (DPS, Life, ES, EHP) above the tree, updated after every change; the node
   panel shows PoB's stat changes for allocating or removing the node along the planned path
@@ -93,6 +93,11 @@ Unit tests (the real tree data and the real engine; Windows, see below):
 
 LuaJIT runs as an interpreter (`jit.off()` in `Host.lua`): PoB's code is branchy and short-running,
 and trace compilation made opening a build several times slower on the emulator.
+
+PoB's files are used as they are. `Host.lua` replaces one function after PoB starts:
+`copyTableSafe`, whose deep copies of attribute nodes (`PassiveSpec:SwitchAttributeNode`) wrote
+into the shared tree data and made memory grow with every tree change in the app. The calculations
+are the same.
 
 ### Updating Path of Building
 

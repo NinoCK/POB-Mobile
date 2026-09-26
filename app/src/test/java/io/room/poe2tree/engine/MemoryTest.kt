@@ -50,6 +50,44 @@ class MemoryTest {
         assertTrue("heap peaked at $peak MB", peak < start * 3)
     }
 
+    /**
+     * Attribute node overrides are deep copies of the shared tree's nodes (PoB's
+     * PassiveSpec:SwitchAttributeNode). PoB's copyTableSafe wrote the fields of copied class proxies
+     * into the original objects, linking the shared tree to every new copy (fixed in Host.lua).
+     */
+    @Test
+    fun attributeSwitchesLeaveTheTreeUnchanged() {
+        EngineTestSupport.loadFixture("deadeye_lightning_arrow")
+        api.lua.exec(
+            """
+            function __treeAttributeTables()
+                local seen, n, stack = { }, 0, { }
+                for _, node in pairs(build.spec.tree.nodes) do
+                    if node.isAttribute then stack[#stack + 1] = node end
+                end
+                while #stack > 0 do
+                    local t = table.remove(stack)
+                    if not seen[t] then
+                        seen[t] = true
+                        n = n + 1
+                        for k, v in next, t do
+                            if type(k) == "table" then stack[#stack + 1] = k end
+                            if type(v) == "table" then stack[#stack + 1] = v end
+                        end
+                    end
+                end
+                return tostring(n)
+            end
+            """.trimIndent(), "treeAttributeTables"
+        )
+        val switch = "for id in pairs(build.spec.hashOverrides) do build.spec:SwitchAttributeNode(id, 1) build.spec:SwitchAttributeNode(id, 3) end"
+        api.lua.exec(switch)
+        val start = api.lua.exec("return __treeAttributeTables()")!!.toInt()
+        repeat(10) { api.lua.exec(switch) }
+        val end = api.lua.exec("return __treeAttributeTables()")!!.toInt()
+        assertTrue("the tree's attribute nodes grew from $start to $end tables", end == start)
+    }
+
     @Test
     fun editsDoNotLeak() {
         EngineTestSupport.loadFixture("warrior_boneshatter_weaponsets")

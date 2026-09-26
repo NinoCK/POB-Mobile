@@ -310,4 +310,37 @@ if __mainObject__.promptMsg then
 	error("Path of Building failed to start: " .. tostring(__mainObject__.promptMsg))
 end
 
+-- A fix on top of PoB: copyTableSafe set a copy's metatable before filling it in. PoB's objects
+-- hold parent class proxies that are their own metatable, with __newindex = the object, so the
+-- fields of a proxy's copy were written into the original object instead. The deep copy in
+-- PassiveSpec:SwitchAttributeNode (a tree node with its ModList objects) thereby linked the shared
+-- tree's attribute options to each new copy, and the next copy copied all of them again: memory
+-- grew with every attribute node switch, exponentially in some hash orders. Here the metatable is
+-- set after the fields, and the copy of a table that is its own metatable is its own metatable.
+-- Other copies are unchanged (no other metatables with __newindex are copied).
+do
+	local subTableMap = { }
+	function copyTableSafe(tbl, noRecurse, preserveMeta, isSubTable)
+		local out = { }
+		if not noRecurse then
+			subTableMap[tbl] = out
+		end
+		for k, v in pairs(tbl) do
+			if not noRecurse and type(v) == "table" then
+				out[k] = subTableMap[v] or copyTableSafe(v, false, preserveMeta, true)
+			else
+				out[k] = v
+			end
+		end
+		if preserveMeta then
+			local meta = getmetatable(tbl)
+			setmetatable(out, meta == tbl and out or meta)
+		end
+		if not noRecurse and not isSubTable then
+			wipeTable(subTableMap)
+		end
+		return out
+	end
+end
+
 build = __mainObject__.main.modes["BUILD"]
