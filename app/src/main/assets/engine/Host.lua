@@ -261,6 +261,12 @@ function SpawnProcess() end
 function Restart() end
 function Exit() end
 
+-- Text measuring: the app lays text out itself, so everything "fits" (PoB shortens labels that
+-- do not fit its layout with DrawStringCursorIndex)
+function DrawStringCursorIndex(height, font, text)
+	return #text + 1
+end
+
 function GetVirtualScreenSize()
 	return 1920, 1080
 end

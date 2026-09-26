@@ -702,6 +702,96 @@
   "level": 90,
   "levelAuto": false,
   "mainSkillLabel": "^7Main Skill: Both",
+  "overlay": {
+   "granted": [],
+   "leapSources": [
+    {
+     "from": "Keystone",
+     "node": 32905,
+     "radius": 2,
+     "to": [
+      "Notable",
+      "Normal"
+     ]
+    }
+   ],
+   "nodes": [],
+   "radii": [
+    {
+     "colour": "^xBB6600",
+     "inner": 0,
+     "label": "Small",
+     "outer": 1200
+    },
+    {
+     "colour": "^x66FFCC",
+     "inner": 0,
+     "label": "Medium",
+     "outer": 1380
+    },
+    {
+     "colour": "^x2222CC",
+     "inner": 0,
+     "label": "Large",
+     "outer": 1560
+    },
+    {
+     "colour": "^xC100FF",
+     "inner": 0,
+     "label": "Very Large",
+     "outer": 1800
+    },
+    {
+     "colour": "^xD35400",
+     "inner": 780,
+     "label": "Variable",
+     "outer": 1140
+    },
+    {
+     "colour": "^x66FFCC",
+     "inner": 960,
+     "label": "Variable",
+     "outer": 1320
+    },
+    {
+     "colour": "^x2222CC",
+     "inner": 1140,
+     "label": "Variable",
+     "outer": 1500
+    },
+    {
+     "colour": "^xC100FF",
+     "inner": 1320,
+     "label": "Variable",
+     "outer": 1680
+    },
+    {
+     "colour": "^x0B9300",
+     "inner": 1500,
+     "label": "Variable",
+     "outer": 1860
+    },
+    {
+     "colour": "^xFFCC00",
+     "inner": 1680,
+     "label": "Variable",
+     "outer": 2040
+    },
+    {
+     "colour": "^xFF6600",
+     "inner": 1980,
+     "label": "Variable",
+     "outer": 2340
+    },
+    {
+     "colour": "^x0099FF",
+     "inner": 2160,
+     "label": "Variable",
+     "outer": 2520
+    }
+   ],
+   "sockets": []
+  },
   "selection": {
    "activeSkills": [
     "Tempest Flurry"
@@ -1158,6 +1248,24 @@
    "warnings": [
     "You do not meet the Intelligence requirement of Tempest Flurry"
    ]
+  },
+  "undo": {
+   "calcs": {
+    "redo": false,
+    "undo": false
+   },
+   "config": {
+    "redo": false,
+    "undo": false
+   },
+   "items": {
+    "redo": false,
+    "undo": false
+   },
+   "skills": {
+    "redo": false,
+    "undo": false
+   }
   }
  }
 }

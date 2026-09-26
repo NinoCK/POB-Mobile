@@ -31,6 +31,17 @@ calculation engine. Tree data, pathing rules, art and calculations come from
   editable per build.
 - Search by node name or stat text, with highlights and next / previous navigation.
 - Multiple builds saved on the device; undo / redo of tree changes.
+- Jewels on the tree, as in PoB: radius rings around sockets holding radius jewels (the conquering
+  jewels' own circles), the socketed jewel's art, passives conquered by Timeless jewels, passives
+  allocated by items. Selecting a socket shows the jewel radii in PoB's colours and tints the
+  passives inside them. The node panel shows PoB's text for passives changed by jewels (Time-Lost
+  jewels' added stats, conquered passives) and a socketed jewel's tooltip.
+- Jewels that change the pathing rules work like in PoB: passives in the ring of Controlled
+  Metamorphosis, near From Nothing's keystone or near keystones with Entwined Realities can be
+  allocated without a path, and Split Personality adds another class's start.
+- Heat map (PoB's node power): offence / defence, or any of PoB's statistics (Life, a DPS type,
+  resistances...), up to a chosen distance, with PoB's power report (the best passives for the
+  statistic, per point along their path; tap one to show it).
 
 ### Calculations (Path of Building's engine)
 
@@ -48,7 +59,10 @@ so the numbers are PoB's. The screens follow PoB's tabs:
   groups in PoB's text format, skill sets.
 - **Items**: item and weapon sets, every slot with PoB's item tooltips (including "Equipping /
   Removing this item will give you"), flask / charm activation, changing and unequipping items,
-  adding items pasted from the game or from PoB, deleting items.
+  adding items pasted from the game or from PoB, deleting items. PoB's item editor: craft an item
+  (rarity, type, base, prefixes and suffixes with their tiers and rolls, runes, quality, "Add
+  modifier" with crafted / essence / custom lines, anoint, corrupt), take one from PoB's uniques or
+  rare templates (variants and rolls), or edit an item of the build.
 - **Calcs**: the Calcs tab's own skill selection and calculation mode, all sections, and PoB's
   breakdowns of each value (formulas and modifier tables with their sources; a passive listed as a
   source can be shown on the tree).
@@ -57,7 +71,12 @@ so the numbers are PoB's. The screens follow PoB's tabs:
 
 Build codes import the whole build (tree, items, skills, configuration) and export the whole build.
 A build's PoB data is saved next to it on the device. The tree is edited in the app, the rest in
-the engine; undo / redo covers tree changes.
+the engine. Undo / redo works on the current screen, like Ctrl+Z / Ctrl+Y in PoB's tabs: the tree's
+history on the Tree screen, PoB's own history of the Skills, Items, Calcs and Config tabs on
+theirs (100 changes each).
+
+PoE2 has no cluster jewels (the tree has no expansion sockets and PoB-PoE2 has none), so there is
+nothing to show for them.
 
 ## Building
 
@@ -88,16 +107,25 @@ Unit tests (the real tree data and the real engine; Windows, see below):
 | `native/host/win-x64` | Desktop build of the bridge for the unit tests, and `luajit.exe` |
 | `app/src/main/assets/pob` | Path of Building's Lua program and data (from `tools/build_pob_assets.py`) |
 | `app/src/main/assets/engine/Host.lua` | Runs PoB headless (like PoB's `HeadlessWrapper.lua`) |
-| `app/src/main/assets/engine/Api.lua`, `api/*.lua` | The app's API over PoB's objects, returning JSON |
+| `app/src/main/assets/engine/Api.lua`, `api/*.lua` | The app's API over PoB's objects, returning JSON (`Craft.lua` drives PoB's item editor controls and popups, `Power.lua` runs PoB's node power builder in steps) |
 | `engine/*.kt` | JNI bindings, the engine thread, the open build's session and data models |
 
 LuaJIT runs as an interpreter (`jit.off()` in `Host.lua`): PoB's code is branchy and short-running,
 and trace compilation made opening a build several times slower on the emulator.
 
-PoB's files are used as they are. `Host.lua` replaces one function after PoB starts:
-`copyTableSafe`, whose deep copies of attribute nodes (`PassiveSpec:SwitchAttributeNode`) wrote
-into the shared tree data and made memory grow with every tree change in the app. The calculations
-are the same.
+PoB's files are used as they are. The engine changes a few things after PoB starts, none of them
+affecting the calculations:
+
+- `copyTableSafe` (`Host.lua`): its deep copies of attribute nodes (`PassiveSpec:SwitchAttributeNode`)
+  wrote into the shared tree data and made memory grow with every tree change in the app.
+- `DrawStringCursorIndex` (`Host.lua`): the app lays out text itself, so text always "fits" (the
+  headless stub made PoB shorten some labels to "...").
+- The Skills tab's undo states (`Api.lua`) leave out the skill data rebuilt at every calculation
+  (0.6 MB per state otherwise), and a new build starts its tabs' undo history like a loaded one.
+
+The app's pathing is a port of PoB's (`tree/PassiveSpec.kt`), including the jewels that change it;
+the engine describes the build's jewels (`api.treeOverlay`), and the unit tests check that PoB
+accepts every tree the app allocates with them.
 
 ### Updating Path of Building
 
@@ -154,6 +182,7 @@ along the orbit, so PoB's orbit arc images are not bundled.
 | --- | --- |
 | `tree/PassiveTree.kt` | Tree loading, node positions and connector geometry (port of PoB `PassiveTree.lua`) |
 | `tree/PassiveSpec.kt` | Allocation state, pathing, dependencies, weapon sets (port of PoB `PassiveSpec.lua`) |
+| `tree/TreeJewels.kt` | The build's jewels from the engine, and PoB's jewel radius membership |
 | `tree/TreeText.kt` | Search and the stats summary |
 | `engine/` | Path of Building's engine: native bindings, session, data models |
 | `io/PobCode.kt` | PoB build code import / export |
@@ -161,11 +190,11 @@ along the orbit, so PoB's orbit arc images are not bundled.
 | `ui/TreeRenderer.kt` | Tree drawing (PoB `PassiveTreeView.lua` draw order and colours) |
 | `ui/QuadBatch.kt`, `ui/SpriteCache.kt` | Batched sprite drawing, atlases and image loading |
 | `ui/StatsScreen.kt`, `CalcsScreen.kt`, `SkillsScreen.kt`, `ItemsScreen.kt`, `ConfigScreen.kt` | PoB's tabs |
+| `ui/CraftEditor.kt` | PoB's item editor and its popups, drawn from the controls the engine reports |
+| `ui/HeatMap.kt` | Heat map settings and PoB's power report |
 | `TreeViewModel.kt` | App state, gestures, point caps, undo / redo |
 
-Not included: jewels' radius effects drawn on the tree, cluster jewels, the node power heat map,
-item crafting (items are added as text), and PoB's per-tab undo for items, skills and
-configuration.
+Not included: PoB's party and notes tabs, the trade site integration, and comparing builds.
 
 ## Licence notes
 

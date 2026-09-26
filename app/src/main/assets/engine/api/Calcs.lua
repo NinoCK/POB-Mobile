@@ -341,7 +341,12 @@ function api.calcsSelect(args)
 	elseif args.showMinion ~= nil then
 		-- Display only: no recalculation needed
 		input.showMinion = args.showMinion and true or false
+		build.calcsTab:AddUndoState()
 		return api.calcsSelection()
+	end
+	-- As PoB's controls (all but the active skill's)
+	if not args.mainActiveSkill then
+		build.calcsTab:AddUndoState()
 	end
 	api.dirty()
 	api.recalc()

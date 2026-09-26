@@ -38,6 +38,26 @@ function recorderClass:CheckForUpdate()
 	self:Clear()
 	return true
 end
+api.newTooltipRecorder = newRecorder
+
+-- A recorded tooltip as JSON lines ({ text, size } or { separator = true }), without PoB's
+-- keyboard and mouse tips
+function api.tooltipLines(tt)
+	local lines = api.array()
+	for _, line in ipairs(tt.lines) do
+		if line.separator then
+			if #lines > 0 and not lines[#lines].separator then
+				lines[#lines + 1] = { separator = true }
+			end
+		elseif not (line.text or ""):find("Tip: ", 1, true) then
+			lines[#lines + 1] = { text = line.text, size = line.size }
+		end
+	end
+	if lines[#lines] and lines[#lines].separator then
+		lines[#lines] = nil
+	end
+	return lines
+end
 function recorderClass:SetRecipe(recipe)
 	self.recipe = recipe
 end
@@ -128,16 +148,12 @@ function api.itemTooltip(args)
 	if not ok then
 		error(err, 0)
 	end
-	local lines = api.array()
-	for _, line in ipairs(tt.lines) do
-		lines[#lines + 1] = line.separator and { separator = true } or { text = line.text, size = line.size }
-	end
-	return { title = itemLabel(item), rarity = item.rarity, lines = lines, raw = item:BuildRaw() }
+	return { title = itemLabel(item), rarity = item.rarity, lines = api.tooltipLines(tt), raw = item:BuildRaw() }
 end
 
 -- After item changes: sockets and slot validity (the Items tab does this every frame), then the
 -- calculation; PopulateSlots can unequip items that are no longer valid, which needs another pass.
-local function refresh()
+function api.refreshItems()
 	local itemsTab = build.itemsTab
 	itemsTab:UpdateSockets()
 	itemsTab:PopulateSlots()
@@ -238,7 +254,7 @@ function api.itemEdit(args)
 	else
 		error("unknown item edit " .. tostring(op), 0)
 	end
-	refresh()
+	api.refreshItems()
 	result.items = api.items()
 	result.state = api.state()
 	return result

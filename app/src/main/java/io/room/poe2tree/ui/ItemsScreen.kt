@@ -3,6 +3,8 @@ package io.room.poe2tree.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -38,11 +40,18 @@ import io.room.poe2tree.engine.ItemsData
 import kotlinx.coroutines.launch
 
 /** The Items screen: PoB's Items tab. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ItemsScreen(vm: TreeViewModel, modifier: Modifier = Modifier) {
     EngineGate(vm, modifier) {
         val calc = vm.calc
         val scope = rememberCoroutineScope()
+        // PoB's item editor while an item is crafted or edited
+        calc.craft?.let { craft ->
+            CraftEditor(vm, craft, modifier)
+            return@EngineGate
+        }
+        var database by remember { mutableStateOf<String?>(null) }
         val (loaded, loading) = rememberLoaded(calc.dataRevision) { calc.items() }
         var data by remember(loaded) { mutableStateOf(loaded) }
         /** (item id, slot name) of the open tooltip. */
@@ -73,7 +82,12 @@ fun ItemsScreen(vm: TreeViewModel, modifier: Modifier = Modifier) {
                         }
                     }
                     WeaponSetToggle(current.useSecondWeaponSet) { second -> edit(mapOf("op" to "weaponSet", "value" to second)) }
-                    OutlinedButton(onClick = { adding = true }) { Text("Add item from text") }
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        OutlinedButton(onClick = { scope.launch { calc.craftNew() } }) { Text("Craft item…") }
+                        OutlinedButton(onClick = { database = "UNIQUE" }) { Text("Uniques…") }
+                        OutlinedButton(onClick = { database = "RARE" }) { Text("Rare templates…") }
+                        OutlinedButton(onClick = { adding = true }) { Text("Add from text") }
+                    }
                 }
             }
             item(key = "slots") {
@@ -117,7 +131,14 @@ fun ItemsScreen(vm: TreeViewModel, modifier: Modifier = Modifier) {
                 onChange = { viewing = null; choosingFor = slot },
                 onUnequip = slot?.let { { viewing = null; edit(mapOf("op" to "equip", "slot" to it.name, "id" to 0)) } },
                 onDelete = if (slot == null) { { viewing = null; edit(mapOf("op" to "delete", "id" to id)) } } else null,
+                onEdit = { viewing = null; scope.launch { calc.craftEdit(id) } },
             )
+        }
+        database?.let { kind ->
+            ItemDbDialog(vm, kind, onDismiss = { database = null }) { item ->
+                database = null
+                scope.launch { calc.craftFromDB(kind, item.name) }
+            }
         }
         choosingFor?.let { slot ->
             val items = current
@@ -187,6 +208,7 @@ private fun ItemDialog(
     onChange: () -> Unit,
     onUnequip: (() -> Unit)?,
     onDelete: (() -> Unit)?,
+    onEdit: () -> Unit,
 ) {
     val (tooltip, loading) = rememberLoaded(id, slotName, vm.calc.dataRevision) { vm.calc.itemTooltip(id, slotName) }
     AlertDialog(
@@ -215,7 +237,9 @@ private fun ItemDialog(
             }
         },
         confirmButton = {
-            Row {
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onEdit) { Text("Edit") }
                 if (canChange) TextButton(onClick = onChange) { Text("Change") }
                 if (onUnequip != null) TextButton(onClick = onUnequip) { Text("Unequip") }
                 if (onDelete != null) TextButton(onClick = onDelete) { Text("Delete", color = PoeColors.Negative) }

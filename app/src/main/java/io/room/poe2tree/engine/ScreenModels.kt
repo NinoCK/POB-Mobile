@@ -146,6 +146,41 @@ data class ItemsData(
 data class TooltipLine(val text: String?, val separator: Boolean)
 data class ItemTooltip(val title: String, val rarity: String?, val lines: List<TooltipLine>, val raw: String)
 
+/** A control of PoB's item editor or of one of its popups (see engine/api/Craft.lua). */
+data class CraftControl(
+    val name: String,
+    /** "dropdown", "edit", "slider", "button", "check", "label" or "list" */
+    val kind: String,
+    val enabled: Boolean,
+    val label: String,
+    val options: List<String>,
+    val selected: Int,
+    val text: String,
+    val prompt: String?,
+    val numeric: Boolean,
+    val multiline: Boolean,
+    val value: Float,
+    val steps: Int,
+    val state: Boolean,
+    /** Dropdown options have details (e.g. an affix's tiers). */
+    val detail: Boolean,
+)
+
+data class CraftPopup(val title: String, val rows: List<List<CraftControl>>)
+
+/** PoB's item editor: the item being crafted or edited (null when none) and its controls. */
+data class CraftState(
+    val lines: List<TooltipLine>?,
+    val editing: Boolean,
+    val rows: List<List<CraftControl>>,
+    val popup: CraftPopup?,
+) {
+    val open get() = lines != null || popup != null
+}
+
+/** A unique or rare template from PoB's item databases. */
+data class DbItem(val name: String, val base: String?, val type: String?)
+
 object ScreenJson {
 
     private fun JSONObject.intOrNull(key: String): Int? = if (has(key) && !isNull(key)) optInt(key) else null
@@ -334,6 +369,46 @@ object ScreenJson {
             )
         },
     )
+
+    private fun craftRows(arr: JSONArray?): List<List<CraftControl>> = arr?.let { rows ->
+        (0 until rows.length()).map { r ->
+            val row = rows.getJSONArray(r)
+            (0 until row.length()).map { i ->
+                val c = row.getJSONObject(i)
+                CraftControl(
+                    name = c.optString("name"),
+                    kind = c.optString("kind"),
+                    enabled = c.optBoolean("enabled", true),
+                    label = c.optString("label"),
+                    options = c.optJSONArray("options")?.let { o -> (0 until o.length()).map { o.optString(it) } }.orEmpty(),
+                    selected = c.optInt("selected", 0),
+                    text = c.optString("text"),
+                    prompt = c.optStringOrNull("prompt"),
+                    numeric = c.optBoolean("numeric"),
+                    multiline = c.optBoolean("multiline"),
+                    value = c.optDouble("value", 0.0).toFloat(),
+                    steps = c.optInt("steps", 0),
+                    state = c.optBoolean("state"),
+                    detail = c.optBoolean("detail"),
+                )
+            }
+        }
+    }.orEmpty()
+
+    fun craftState(o: JSONObject): CraftState {
+        val item = o.optJSONObject("item")
+        val popup = o.optJSONObject("popup")
+        return CraftState(
+            lines = item?.let { it.objects("lines").map { l -> TooltipLine(l.optStringOrNull("text"), l.optBoolean("separator")) } },
+            editing = item?.optBoolean("editing") ?: false,
+            rows = craftRows(o.optJSONArray("rows")),
+            popup = popup?.let { CraftPopup(it.optString("title"), craftRows(it.optJSONArray("rows"))) },
+        )
+    }
+
+    fun dbItems(arr: JSONArray) = (0 until arr.length()).map { i ->
+        arr.getJSONObject(i).let { DbItem(it.optString("name"), it.optStringOrNull("base"), it.optStringOrNull("type")) }
+    }
 
     fun itemTooltip(o: JSONObject) = ItemTooltip(
         title = o.optString("title"),

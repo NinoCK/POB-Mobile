@@ -11,7 +11,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -21,8 +23,8 @@ sealed interface EngineStatus {
     data class Failed(val message: String) : EngineStatus
 }
 
-/** Stat changes for the selected node, for the tree state [treeSeq]. */
-data class CompareResult(val nodeId: Int, val treeSeq: Int, val lines: List<String>)
+/** Stat changes for the selected node, for the tree state [treeSeq], and PoB's text for it ([info]). */
+data class CompareResult(val nodeId: Int, val treeSeq: Int, val lines: List<String>, val info: List<String>)
 
 /**
  * The open build in Path of Building's engine. The app's tree is authoritative for the passive
@@ -54,6 +56,16 @@ class CalcSession(
         private set
     var compare by mutableStateOf<CompareResult?>(null)
         private set
+    /** PoB's item editor, while an item is being crafted or edited. */
+    var craft by mutableStateOf<CraftState?>(null)
+        private set
+    /** Node powers of the last completed heat map (kept while a new one is built). */
+    var power by mutableStateOf<PowerResult?>(null)
+        private set
+    /** Progress (0..100) of the heat map being built, or -1. */
+    var powerProgress by mutableIntStateOf(-1)
+        private set
+    private var powerJob: Job? = null
 
     private data class OpenRequest(val buildId: String, val name: String, val xml: String?, val tree: PassiveSpec.Snapshot, val level: Int, val treeSeq: Int)
     private data class TreePush(val buildId: String, val tree: PassiveSpec.Snapshot, val seq: Int)
@@ -105,9 +117,13 @@ class CalcSession(
         val unsaved = saveJob?.isActive == true
         saveJob?.cancel()
         compareJob?.cancel()
+        powerJob?.cancel()
         openBuildId = null
         state = null
         compare = null
+        power = null
+        powerProgress = -1
+        craft = null
         if (status == EngineStatus.Ready) {
             scope.launch {
                 if (unsaved && previous != null) saveNow(previous)
@@ -168,14 +184,99 @@ class CalcSession(
             appliedTreeSeq.first { it >= treeSeq }
             val args = JSONObject().put("id", nodeId).put("allocMode", allocMode)
             if (path != null) args.put("path", JSONArray().apply { path.forEach { put(it) } })
-            val lines = run(reportErrors = false) { api -> EngineJson.nodeCompare(api.callObject("nodeCompare", args)).lines }
-            if (lines != null) compare = CompareResult(nodeId, treeSeq, lines)
+            val result = run(reportErrors = false) { api -> EngineJson.nodeCompare(api.callObject("nodeCompare", args)) }
+            if (result != null) compare = CompareResult(nodeId, treeSeq, result.lines, result.info)
         }
+    }
+
+    // ---- Node power heat map ----
+
+    suspend fun powerStats(): List<PowerStat>? = read { api ->
+        val arr = api.callArray("powerStats")
+        (0 until arr.length()).map { i -> arr.getJSONObject(i).let { PowerStat(it.optString("label"), it.optString("stat").ifEmpty { null }) } }
+    }
+
+    /**
+     * Builds PoB's node powers for [stat] (1-based index in [powerStats]) up to [maxDepth] points away
+     * (null: all), for the tree state [treeSeq]. Runs in short steps, so other engine calls go in between.
+     */
+    fun startPower(stat: Int, maxDepth: Int?, treeSeq: Int) {
+        powerJob?.cancel()
+        powerProgress = 0
+        powerJob = scope.launch {
+            appliedTreeSeq.first { it >= treeSeq }
+            if (!ready) return@launch
+            val args = JSONObject().put("stat", stat)
+            if (maxDepth != null) args.put("maxDepth", maxDepth)
+            run(reportErrors = false) { api -> api.call("powerStart", args) } ?: return@launch
+            while (isActive) {
+                val step = run(reportErrors = false) { api -> api.callObject("powerStep", mapOf("ms" to POWER_STEP_MS)) } ?: break
+                if (step.optBoolean("done")) {
+                    power = PowerResult.parse(step.getJSONObject("result"))
+                    powerProgress = -1
+                    return@launch
+                }
+                powerProgress = step.optInt("progress")
+                yield()
+            }
+        }
+    }
+
+    fun stopPower() {
+        powerJob?.cancel()
+        powerJob = null
+        powerProgress = -1
+        power = null
+    }
+
+    // ---- Item editor (crafting) ----
+
+    /** Runs an item editor call; an item added to the build recalculates and saves it. */
+    private suspend fun craftCall(name: String, args: JSONObject = JSONObject()): CraftState? {
+        if (!ready) return null
+        val (result, newState) = run { api ->
+            val o = api.callObject(name, args)
+            ScreenJson.craftState(o) to (if (o.optBoolean("added")) EngineJson.state(o.getJSONObject("state")) else null)
+        } ?: return null
+        craft = result.takeIf { it.open }
+        if (newState != null) {
+            state = newState
+            dataRevision++
+            scheduleSave()
+        }
+        return result
+    }
+
+    /** Incremented when the editor starts on another item (its text fields start over). */
+    var craftSession by mutableIntStateOf(0)
+        private set
+
+    suspend fun craftNew() = craftCall("craftNew").also { craftSession++ }
+    suspend fun craftEdit(id: Int) = craftCall("craftEdit", JSONObject().put("id", id)).also { craftSession++ }
+    suspend fun craftFromDB(kind: String, name: String) =
+        craftCall("craftFromDB", JSONObject().put("kind", kind).put("name", name)).also { craftSession++ }
+    suspend fun craftCancel() = craftCall("craftCancel")
+
+    /** Operates a control: op "select" (1-based), "text", "value" (0..1), "click" or "check". */
+    suspend fun craftAction(popup: Boolean, name: String, op: String, value: Any? = null) = craftCall(
+        "craftAction",
+        JSONObject().put("target", if (popup) "popup" else "editor").put("name", name).put("op", op).put("value", value ?: JSONObject.NULL),
+    )
+
+    suspend fun craftDetail(popup: Boolean, name: String, index: Int): List<String>? = read { api ->
+        api.callArray("craftDetail", JSONObject().put("target", if (popup) "popup" else "editor").put("name", name).put("index", index)).strings()
+    }
+
+    suspend fun itemDB(kind: String, query: String): List<DbItem>? = read { api ->
+        ScreenJson.dbItems(api.callArray("itemDB", JSONObject().put("kind", kind).put("query", query)))
     }
 
     // ---- Changes made in the engine ----
 
     fun select(args: Map<String, Any?>) = mutate { api -> EngineJson.state(api.callObject("select", JSONObject(args))) }
+
+    /** Undoes (or redoes) the last change of a PoB tab ("skills", "items", "config", "calcs"). */
+    fun undo(tab: String, redo: Boolean) = mutate { api -> EngineJson.state(api.callObject("undo", mapOf("tab" to tab, "redo" to redo))) }
 
     fun setLevel(level: Int) = mutate(save = true) { api -> EngineJson.state(api.callObject("setLevel", mapOf("level" to level))) }
 
@@ -315,5 +416,7 @@ class CalcSession(
     companion object {
         private const val TAG = "PoE2Calc"
         private const val TREE_SAVE_DELAY_MS = 1500L
+        /** Engine time per heat map step: other calls wait at most about this long. */
+        private const val POWER_STEP_MS = 120
     }
 }

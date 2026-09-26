@@ -51,7 +51,7 @@ class PobApi(val lua: LuaState) {
 
     companion object {
         /** Feature modules in assets/engine/api, loaded in this order. */
-        val MODULES = listOf("Stats", "Tree", "Calcs", "Config", "Skills", "Items")
+        val MODULES = listOf("Stats", "Tree", "Calcs", "Config", "Skills", "Items", "Power", "Craft")
 
         fun parse(text: String): Any? = JSONTokener(text).nextValue()
     }

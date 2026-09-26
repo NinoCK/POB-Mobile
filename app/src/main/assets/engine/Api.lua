@@ -126,6 +126,13 @@ function api.loadBuild(args)
 		main.newMode = nil
 		error(prompt or "the build could not be opened", 0)
 	end
+	-- The tabs start their undo history when loading their XML: a new build starts it here, so its
+	-- first change can be undone too
+	for _, tab in ipairs({ build.skillsTab, build.itemsTab, build.configTab, build.calcsTab }) do
+		if not tab.undo[1] then
+			tab:ResetUndo()
+		end
+	end
 	-- Jewel socket slots follow the allocated tree (the Items tab updates them when drawn)
 	build.itemsTab:UpdateSockets()
 	build.skillsTab:UpdateGlobalGemCountAssignments()
@@ -159,21 +166,83 @@ local function recalcOnce()
 	build:RefreshSkillSelectControls(build.controls, build.mainSocketGroup, "")
 end
 
--- PoB keeps up to 101 undo states per tab (copies of items, skills, configuration...). The app does
--- not use PoB's undo, so only the current state is kept, bounding memory use.
+-- PoB's undo (UndoHandler) for the Skills, Items, Configuration and Calcs tabs, as with Ctrl+Z /
+-- Ctrl+Y in PoB. Each tab keeps its own history (up to 100 changes, PoB's limit); the tree's
+-- history is the app's.
+local undoTabs = { skills = "skillsTab", items = "itemsTab", config = "configTab", calcs = "calcsTab" }
+
+-- The tree's undo states are not used, so only the current one is kept
 local function trimUndo()
-	for _, handler in ipairs({ build.spec, build.skillsTab, build.itemsTab, build.configTab, build.calcsTab }) do
-		if handler and handler.undo then
-			for i = #handler.undo, 2, -1 do
-				handler.undo[i] = nil
-			end
-			wipeTable(handler.redo)
+	local spec = build.spec
+	if spec and spec.undo then
+		for i = #spec.undo, 2, -1 do
+			spec.undo[i] = nil
 		end
+		wipeTable(spec.redo)
 	end
+end
+
+-- The Skills tab's undo states are shallow copies of the socket groups and gems, so they also keep
+-- the skill data of the calculation at that time alive (displaySkillList...: about 0.6 MB per
+-- state). CalcSetup rebuilds that data at every calculation, and the app recalculates after an
+-- undo, so the states leave it out.
+local function patchSkillsUndoState()
+	local SkillsTabClass = common.classes["SkillsTab"]
+	if not SkillsTabClass or SkillsTabClass.appUndoStatePatched then
+		return
+	end
+	local createUndoState = SkillsTabClass.CreateUndoState
+	function SkillsTabClass:CreateUndoState()
+		local state = createUndoState(self)
+		for _, skillSet in pairs(state.skillSets) do
+			for _, list in ipairs({ skillSet.socketGroupList, skillSet.removedSocketGroupList }) do
+				for _, group in pairs(list) do
+					group.displaySkillList = nil
+					group.displaySkillListCalcs = nil
+					group.displayGemList = nil
+					for _, gem in pairs(group.gemList) do
+						gem.displayEffect = nil
+					end
+				end
+			end
+		end
+		return state
+	end
+	SkillsTabClass.appUndoStatePatched = true
+end
+
+-- { skills = { undo, redo }, items = ..., config = ..., calcs = ... }: what can be undone / redone
+function api.undoState()
+	local out = { }
+	for name, key in pairs(undoTabs) do
+		local tab = build[key]
+		out[name] = { undo = tab.undo[2] ~= nil, redo = tab.redo[1] ~= nil }
+	end
+	return out
+end
+
+-- Undoes (or with redo = true, redoes) the last change of a tab. args: { tab, redo }
+function api.undo(args)
+	local tab = build[undoTabs[args.tab] or error("unknown tab " .. tostring(args.tab), 0)]
+	if args.redo then
+		tab:Redo()
+	else
+		tab:Undo()
+	end
+	if args.tab == "items" then
+		-- Sockets and slots, as after item changes
+		api.refreshItems()
+	else
+		api.dirty()
+		api.recalc()
+	end
+	return api.state()
 end
 
 -- Recalculates the open build
 function api.recalc()
+	-- (The Skills tab class is loaded with the first build)
+	patchSkillsUndoState()
 	trimUndo()
 	local level = build.characterLevel
 	recalcOnce()

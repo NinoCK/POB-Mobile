@@ -30,8 +30,11 @@ DXGI_BC1 = (70, 71, 72)
 DXGI_BC7 = (97, 98, 99)
 DXGI_RGBA = (28, 29)
 
-# Texture files we don't need (jewel radius art, oils, greyed-out icons)
-SKIP_PREFIXES = ("skills-disabled_", "oils_", "legion_1024", "legion_1032", "legion_564", "legion_572", "jewel-sockets_")
+# Texture files we don't need (oils, greyed-out icons, older jewel radius art)
+SKIP_PREFIXES = ("skills-disabled_", "oils_", "legion_1024", "legion_564")
+
+# Path of Building's own images drawn on the tree: jewel radius rings (PassiveTreeView)
+POB_ASSETS = ("ShadedOuterRing", "ShadedOuterRingFlipped", "ShadedInnerRing", "ShadedInnerRingFlipped")
 
 # Transparent gutter added to the right/bottom of each layer in newer texture arrays
 PADDING = 8
@@ -42,6 +45,8 @@ MAX_DIM = {
     "ascendancy-background_4": 2048,  # BGTree / BGTreeActive (class centre art)
     "ascendancy-background_1": 1024,  # class + ascendancy backgrounds
     "mastery-active-effect_": 384,
+    "legion_572_": 512,   # conquering jewel radius circles
+    "legion_1032_": 512,
 }
 
 
@@ -252,6 +257,12 @@ def main():
         counter += 1
         rel = f"s/{counter}.png"
         shutil.copyfile(path, os.path.join(out, rel))
+        sprites[name] = {"f": rel, "w": img.width, "h": img.height, "sw": img.width, "sh": img.height}
+
+    for name in POB_ASSETS:
+        img = Image.open(os.path.join(args.pob, "src", "Assets", name + ".png")).convert("RGBA")
+        counter += 1
+        rel = os.path.relpath(save_image(img, os.path.join(out, f"s/{counter}"), False), out).replace("\\", "/")
         sprites[name] = {"f": rel, "w": img.width, "h": img.height, "sw": img.width, "sh": img.height}
 
     with open(os.path.join(out, "sprites.json"), "w", encoding="utf-8") as f:

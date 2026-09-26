@@ -118,7 +118,7 @@ def reference(pob):
                 api.loadBuild({{ xml = {lua_string(xml)}, name = {lua_string(name)} }})
             end)
             if not ok then error(err) end
-            for _, module in ipairs({{ "Stats", "Tree", "Calcs", "Config", "Skills", "Items" }}) do api.load(module) end
+            for _, module in ipairs({{ "Stats", "Tree", "Calcs", "Config", "Skills", "Items", "Power", "Craft" }}) do api.load(module) end
             api.recalc()
             local out = build.calcsTab.mainOutput
             local flat = {{ }}

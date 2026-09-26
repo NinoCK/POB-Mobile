@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.room.poe2tree.TreeViewModel
 import io.room.poe2tree.tree.NodeType
+import io.room.poe2tree.tree.NodeView
 
 /** Portrait: bottom panel over the tree with the selected node's details and allocation buttons. */
 @Composable
@@ -119,16 +120,26 @@ private fun NodeDetails(vm: TreeViewModel, idx: Int, modifier: Modifier, statsMa
             (if (statsMaxHeight != null) Modifier.heightIn(max = statsMaxHeight).verticalScroll(rememberScrollState()) else Modifier)
                 .padding(end = 8.dp)
         ) {
-            if (view.stats.isEmpty() && !node.isMultipleChoice) {
-                Text("No stats", color = PoeColors.TextDim, fontStyle = FontStyle.Italic, fontSize = 14.sp)
-            }
-            for (line in view.stats) {
-                Text(line, color = PoeColors.Magic, fontSize = 15.sp, modifier = Modifier.padding(vertical = 1.dp))
+            // PoB's text when it differs from the tree's: stats changed by jewels in radius, conquered
+            // passives, "effect of small passives" modifiers, or the socketed jewel
+            val pobText = vm.calc.compare?.takeIf { it.nodeId == node.id }?.info?.let { pobNodeText(it, view) }
+            if (pobText != null) {
+                for (line in pobText) {
+                    if (PobText.strip(line).isBlank()) Spacer(Modifier.height(6.dp))
+                    else PobLabel(line, fontSize = 15.sp, modifier = Modifier.padding(vertical = 1.dp))
+                }
+            } else {
+                if (view.stats.isEmpty() && !node.isMultipleChoice) {
+                    Text("No stats", color = PoeColors.TextDim, fontStyle = FontStyle.Italic, fontSize = 14.sp)
+                }
+                for (line in view.stats) {
+                    Text(line, color = PoeColors.Magic, fontSize = 15.sp, modifier = Modifier.padding(vertical = 1.dp))
+                }
             }
             if (node.isMultipleChoice) {
                 Text("Choose one of the connected options.", color = PoeColors.Tip, fontSize = 13.sp)
             }
-            for (line in view.reminderText) {
+            if (pobText == null) for (line in view.reminderText) {
                 Text(line, color = PoeColors.TextDim, fontStyle = FontStyle.Italic, fontSize = 13.sp)
             }
             if (node.unlockIdx != null) {
@@ -138,8 +149,11 @@ private fun NodeDetails(vm: TreeViewModel, idx: Int, modifier: Modifier, statsMa
             if (node.recipe.isNotEmpty()) {
                 Text("Anoint: " + node.recipe.joinToString(", "), color = PoeColors.TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
             }
-            for (line in node.flavourText) {
+            if (pobText == null) for (line in node.flavourText) {
                 Text(line, color = PoeColors.Unique, fontStyle = FontStyle.Italic, fontSize = 13.sp, textAlign = TextAlign.Start, modifier = Modifier.padding(top = 4.dp))
+            }
+            if (vm.spec.canAllocateUnconnected(idx) && !alloc) {
+                Text("Can be allocated without pathing to it", color = PoeColors.Tip, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
             }
             if (!node.type.isStart) NodeCompare(vm, node.id)
         }
@@ -249,6 +263,19 @@ private fun AttributeButton(label: String, color: Color, active: Boolean, modifi
             Text(label, fontWeight = FontWeight.Bold)
         }
     }
+}
+
+/**
+ * PoB's text for a node (name, then sections separated by blank lines), without the name, or null
+ * when its stats are the tree's own. For a socket holding a jewel, the jewel's tooltip.
+ */
+private fun pobNodeText(info: List<String>, view: NodeView): List<String>? {
+    val lines = info.dropWhile { PobText.strip(it).isBlank() }
+    if (lines.isEmpty()) return null
+    val name = PobText.strip(lines.first()).trim()
+    val body = if (name == view.name) lines.drop(1).dropWhile { PobText.strip(it).isBlank() } else lines
+    val stats = body.takeWhile { PobText.strip(it).isNotBlank() }.map { PobText.strip(it).trim() }
+    return if (name == view.name && stats == view.stats) null else body
 }
 
 @Composable

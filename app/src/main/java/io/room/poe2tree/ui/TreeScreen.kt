@@ -72,7 +72,7 @@ import io.room.poe2tree.TreeViewModel
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 
-private enum class DialogKind { None, Import, Export, Settings, Summary, Builds, NewBuild, Rename, Reset, About }
+private enum class DialogKind { None, Import, Export, Settings, Summary, Builds, NewBuild, Rename, Reset, About, HeatMap, PowerReport }
 
 @Composable
 fun AppRoot(vm: TreeViewModel) {
@@ -101,6 +101,7 @@ private class ScreenActions(
     val onSearch: () -> Unit,
     val onMenu: (DialogKind) -> Unit,
     val onPoints: () -> Unit,
+    val onHeatMap: () -> Unit,
 )
 
 @Composable
@@ -137,6 +138,7 @@ private fun TreeScreen(vm: TreeViewModel) {
         },
         onMenu = { dialog = it },
         onPoints = { dialog = DialogKind.Settings },
+        onHeatMap = { dialog = DialogKind.HeatMap },
     )
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -168,6 +170,8 @@ private fun TreeScreen(vm: TreeViewModel) {
                 "Game art © Grinding Gear Games. This app is not affiliated with Grinding Gear Games.",
             null, onConfirm = {}, onDismiss = { dialog = DialogKind.None },
         )
+        DialogKind.HeatMap -> HeatMapDialog(vm, onReport = { dialog = DialogKind.PowerReport }) { dialog = DialogKind.None }
+        DialogKind.PowerReport -> PowerReportDialog(vm) { dialog = DialogKind.None }
         DialogKind.None -> {}
     }
 }
@@ -189,7 +193,7 @@ private fun PortraitLayout(vm: TreeViewModel, zoom: ZoomController, snackbar: Sn
             KeyStatsBar(vm, onClick = { vm.screen = Screen.Stats })
             HorizontalDivider(color = PoeColors.Outline)
             if (searching) SearchBar(vm)
-            TreeArea(vm, zoom, snackbar, bottomPanel = true, overlayInsets = WindowInsets(0), modifier = Modifier.weight(1f).fillMaxWidth())
+            TreeArea(vm, zoom, snackbar, actions, bottomPanel = true, overlayInsets = WindowInsets(0), modifier = Modifier.weight(1f).fillMaxWidth())
         } else {
             Box(Modifier.weight(1f).fillMaxWidth().background(MaterialTheme.colorScheme.background).navigationBarsPadding()) {
                 ScreenContent(vm, Modifier.fillMaxSize())
@@ -283,7 +287,7 @@ private fun LandscapeLayout(
         VerticalDivider(color = PoeColors.Outline)
         if (vm.screen == Screen.Tree) {
             TreeArea(
-                vm, zoom, snackbar, bottomPanel = false,
+                vm, zoom, snackbar, actions, bottomPanel = false,
                 overlayInsets = bars.only(WindowInsetsSides.End + WindowInsetsSides.Vertical),
                 modifier = Modifier.weight(1f).fillMaxHeight(),
             )
@@ -309,6 +313,7 @@ private fun TreeArea(
     vm: TreeViewModel,
     zoom: ZoomController,
     snackbar: SnackbarHostState,
+    actions: ScreenActions,
     bottomPanel: Boolean,
     overlayInsets: WindowInsets,
     modifier: Modifier,
@@ -316,13 +321,13 @@ private fun TreeArea(
     Box(modifier) {
         TreeCanvas(vm, zoom, Modifier.fillMaxSize())
         Box(Modifier.fillMaxSize().windowInsetsPadding(overlayInsets)) {
-            TreeOverlays(vm, zoom, snackbar, bottomPanel)
+            TreeOverlays(vm, zoom, snackbar, actions, bottomPanel)
         }
     }
 }
 
 @Composable
-private fun BoxScope.TreeOverlays(vm: TreeViewModel, zoom: ZoomController, snackbar: SnackbarHostState, bottomPanel: Boolean) {
+private fun BoxScope.TreeOverlays(vm: TreeViewModel, zoom: ZoomController, snackbar: SnackbarHostState, actions: ScreenActions, bottomPanel: Boolean) {
     Column(
         Modifier
             .align(Alignment.TopEnd)
@@ -333,19 +338,26 @@ private fun BoxScope.TreeOverlays(vm: TreeViewModel, zoom: ZoomController, snack
         RoundButton(AppIcons.Minus, "Zoom out", enabled = vm.canZoomOut) { zoom.zoomBy(1f / ZoomController.STEP) }
         RoundButton(AppIcons.ZoomOut, "Show whole tree") { vm.zoomOutFull() }
         RoundButton(AppIcons.Locate, "Go to class start") { vm.focusOnStart() }
+        RoundButton(AppIcons.Heat, "Heat map", tint = if (vm.heatMap) Color(0xFFFF6E40) else null, onClick = actions.onHeatMap)
     }
-    if (vm.allocMode > 0) {
-        val color = if (vm.allocMode == 1) PoeColors.Negative else PoeColors.Positive
-        Text(
-            "Allocating weapon set ${vm.allocMode} points",
-            color = Color.White,
-            fontSize = 13.sp,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(10.dp)
-                .background(color.copy(alpha = 0.55f), RoundedCornerShape(6.dp))
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-        )
+    Column(
+        Modifier
+            .align(Alignment.TopStart)
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (vm.allocMode > 0) {
+            val color = if (vm.allocMode == 1) PoeColors.Negative else PoeColors.Positive
+            Text(
+                "Allocating weapon set ${vm.allocMode} points",
+                color = Color.White,
+                fontSize = 13.sp,
+                modifier = Modifier
+                    .background(color.copy(alpha = 0.55f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+        }
+        HeatMapChip(vm, onClick = actions.onHeatMap)
     }
     Column(
         Modifier
@@ -385,8 +397,9 @@ private fun TopBar(vm: TreeViewModel, actions: ScreenActions, showLevel: Boolean
             Text(if (showLevel) "$version · Lv ${vm.settings.level}" else version, fontSize = 11.sp, color = PoeColors.TextDim)
         }
         IconButton(onClick = actions.onSearch) { Icon(AppIcons.Search, contentDescription = "Search") }
-        IconButton(onClick = { vm.undo() }, enabled = vm.canUndo) { Icon(AppIcons.Undo, contentDescription = "Undo") }
-        IconButton(onClick = { vm.redo() }, enabled = vm.canRedo) { Icon(AppIcons.Redo, contentDescription = "Redo") }
+        // The history of the current screen: the tree's, or PoB's Skills / Items / Calcs / Config tab's
+        IconButton(onClick = { vm.screenUndo() }, enabled = vm.screenCanUndo) { Icon(AppIcons.Undo, contentDescription = "Undo") }
+        IconButton(onClick = { vm.screenRedo() }, enabled = vm.screenCanRedo) { Icon(AppIcons.Redo, contentDescription = "Redo") }
         Box {
             IconButton(onClick = { menu = true }) { Icon(AppIcons.More, contentDescription = "Menu") }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -620,7 +633,7 @@ private fun SearchBar(vm: TreeViewModel) {
 }
 
 @Composable
-private fun RoundButton(icon: ImageVector, description: String, enabled: Boolean = true, onClick: () -> Unit) {
+private fun RoundButton(icon: ImageVector, description: String, enabled: Boolean = true, tint: Color? = null, onClick: () -> Unit) {
     Surface(
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
@@ -629,7 +642,7 @@ private fun RoundButton(icon: ImageVector, description: String, enabled: Boolean
             .border(1.dp, PoeColors.Outline, CircleShape),
     ) {
         IconButton(onClick = onClick, enabled = enabled) {
-            Icon(icon, description, tint = if (enabled) PoeColors.Gold else PoeColors.TextDim.copy(alpha = 0.4f))
+            Icon(icon, description, tint = if (!enabled) PoeColors.TextDim.copy(alpha = 0.4f) else tint ?: PoeColors.Gold)
         }
     }
 }

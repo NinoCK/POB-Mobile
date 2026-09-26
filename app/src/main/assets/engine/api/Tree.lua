@@ -143,6 +143,138 @@ function api.openBuild(args)
 	return state
 end
 
+---------------------------------------------------------------------------------------------------
+-- Jewels and items on the tree: what PassiveTreeView draws and what PassiveSpec's pathing uses
+---------------------------------------------------------------------------------------------------
+
+-- Ascendancy passives that let passives near allocated keystones be allocated without a connection
+-- (the intuitiveLeapLikeNodes of PassiveSpec:BuildAllDependsAndPaths), per tree
+local leapSourceCache = setmetatable({ }, { __mode = "k" })
+local function leapSources(tree)
+	local cached = leapSourceCache[tree]
+	if cached then
+		return cached
+	end
+	local out = api.array()
+	for id, node in pairs(tree.nodes) do
+		if node.ascendancyName and node.modList then
+			for _, radius in ipairs(node.modList:List(nil, "AllocateFromNodeRadius")) do
+				out[#out + 1] = { node = id, from = radius.from, radius = radius.radiusIndex, to = api.array(copyTable(radius.to)) }
+			end
+		end
+	end
+	leapSourceCache[tree] = out
+	return out
+end
+
+-- Jewels, item-granted passives and conquered passives for the app's tree view and pathing:
+--   radii:   PoB's jewel radii (data.jewelRadius, with the tree distance multiplier), 1-based
+--   sockets: every jewel in a socket (allocated or not, like spec.jewels): radius index, whether the
+--            radius is a ring (Variable), conqueror, and the effects on pathing (PoB's jewelData)
+--   granted: passives allocated by items
+--   nodes:   passives replaced by a conquering jewel (name, icon)
+--   leapSources: ascendancy passives allowing allocation near keystones
+function api.treeOverlay()
+	local spec = build.spec
+	local itemsTab = build.itemsTab
+	local mult = data.gameConstants["PassiveTreeJewelDistanceMultiplier"]
+	local out = {
+		radii = api.array(),
+		sockets = api.array(),
+		granted = api.array(),
+		nodes = api.array(),
+		leapSources = leapSources(spec.tree),
+	}
+	for i, r in ipairs(data.jewelRadius) do
+		out.radii[i] = { inner = r.inner * mult, outer = r.outer * mult, colour = r.col, label = r.label }
+	end
+	for nodeId, itemId in pairs(spec.jewels) do
+		local item = itemId ~= 0 and itemsTab.items[itemId] or nil
+		if item and spec.nodes[nodeId] then
+			local jewelData = item.jewelData or { }
+			local entry = {
+				node = nodeId,
+				item = itemId,
+				name = item.name,
+				title = item.title,
+				baseName = item.baseName,
+				rarity = item.rarity,
+				radius = item.jewelRadiusIndex,
+				variable = item.jewelRadiusLabel == "Variable",
+				leap = jewelData.intuitiveLeapLike and true or false,
+				limitDisabled = jewelData.limitDisabled and true or false,
+				fromNothing = api.array(),
+			}
+			local conqueror = jewelData.conqueredBy and jewelData.conqueredBy.conqueror
+			if conqueror and conqueror.type then
+				entry.conqueror = conqueror.type
+			end
+			if jewelData.fromNothingKeystones then
+				-- keystoneMap has both the name and its lower case: the jewel's keys match one of them
+				local seen = { }
+				for keyName, keyNode in pairs(spec.tree.keystoneMap) do
+					if jewelData.fromNothingKeystones[keyName] and not seen[keyNode.id] then
+						seen[keyNode.id] = true
+						entry.fromNothing[#entry.fromNothing + 1] = keyNode.id
+					end
+				end
+			end
+			if jewelData.alternateClassStart then
+				entry.alternateStart = spec.tree.classStartNodeNameMap[jewelData.alternateClassStart]
+			end
+			out.sockets[#out.sockets + 1] = entry
+		end
+	end
+	local env = build.calcsTab.mainEnv
+	for id in pairs(env and env.grantedPassives or { }) do
+		out.granted[#out.granted + 1] = id
+	end
+	for id, node in pairs(spec.nodes) do
+		local treeNode = spec.tree.nodes[id]
+		if node.conqueredBy and treeNode and (node.dn ~= treeNode.dn or node.icon ~= treeNode.icon) then
+			out.nodes[#out.nodes + 1] = { id = id, name = node.dn, icon = node.icon }
+		end
+	end
+	return out
+end
+
+-- PoB's text for a passive (PassiveTreeView:AddNodeTooltip without stat differences and pathing):
+-- its name and stats as changed by jewels in radius, conquering jewels and "effect of small
+-- passive skills" modifiers, or the jewel's tooltip for a socket. Lines with colour codes; ""
+-- separates sections.
+local function nodeInfo(node)
+	local viewer = build.treeTab.viewer
+	local tt = api.newTooltipRecorder()
+	-- As PassiveTreeView:Draw computes it for the tooltip
+	local incSmallPassiveSkillEffect = 0
+	for _, n in pairs(build.spec.allocNodes) do
+		incSmallPassiveSkillEffect = incSmallPassiveSkillEffect + n.modList:Sum("INC", nil, "SmallPassiveSkillEffect")
+	end
+	local show = viewer.showStatDifferences
+	viewer.showStatDifferences = false
+	local ok, err = pcall(viewer.AddNodeTooltip, viewer, tt, node, build, incSmallPassiveSkillEffect)
+	viewer.showStatDifferences = show
+	if not ok then
+		error(err, 0)
+	end
+	local lines = api.array()
+	for _, line in ipairs(tt.lines) do
+		local text = line.separator and "" or line.text
+		-- What follows is about stat differences and pathing, shown separately in the app
+		if text:find("Ctrl+D", 1, true) then
+			break
+		end
+		-- Desktop tips (mouse and keyboard)
+		if not text:find("Tip: ", 1, true) then
+			lines[#lines + 1] = text
+		end
+	end
+	while lines[#lines] and StripEscapes(lines[#lines]):match("^%s*$") do
+		lines[#lines] = nil
+	end
+	return lines
+end
+
 -- Collects tooltip lines (PoB's Tooltip only needs AddLine / AddSeparator here)
 local function newLineCollector()
 	local tt = { lines = { } }
@@ -249,5 +381,5 @@ function api.nodeCompare(args)
 	if not ok then
 		error(err, 0)
 	end
-	return { lines = api.array(tt.lines), count = count }
+	return { lines = api.array(tt.lines), count = count, info = nodeInfo(node) }
 end

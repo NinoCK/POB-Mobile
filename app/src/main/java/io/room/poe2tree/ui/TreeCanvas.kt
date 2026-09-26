@@ -95,6 +95,8 @@ fun TreeCanvas(vm: TreeViewModel, zoom: ZoomController, modifier: Modifier = Mod
         vm.selected
         vm.allocMode
         vm.searchResults
+        vm.heatMap
+        vm.calc.power
         val state = vm.renderState()
         drawIntoCanvas { canvas ->
             vm.renderer.draw(canvas.nativeCanvas, size.width.toInt(), size.height.toInt(), vm.spec, state)

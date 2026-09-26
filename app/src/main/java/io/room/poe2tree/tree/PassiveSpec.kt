@@ -2,7 +2,8 @@ package io.room.poe2tree.tree
 
 /**
  * Allocation state of the passive tree, with PoB's pathing and dependency rules.
- * Port of PoB's PassiveSpec.lua, without jewels, cluster jewels, masteries and calculations.
+ * Port of PoB's PassiveSpec.lua, without masteries and calculations. Jewels that change the rules
+ * (allocation without a connection, another class's start) come from the engine: [jewels].
  *
  * Allocation modes: 0 = normal points, 1 = weapon set 1, 2 = weapon set 2.
  */
@@ -28,6 +29,18 @@ class PassiveSpec(val tree: PassiveTree) {
     /** Last chosen attribute (1..3) used for attribute nodes on a path. */
     var attributeIndex: Int = 1
 
+    /** Jewels and items acting on the tree, from Path of Building (see [setJewels]). */
+    var jewels: TreeJewels = TreeJewels.EMPTY
+        private set
+    /**
+     * False while the open build's jewels are not known yet: unconnected nodes are then kept, as
+     * they may be allocated through a jewel (PoB keeps them).
+     */
+    var jewelsKnown = true
+        private set
+    val radiusIndex = RadiusIndex(tree)
+    private val keystones = nodes.filter { it.type == NodeType.Keystone && it.group > 0 }.map { it.idx }
+
     // ---- Derived state (rebuilt by [rebuild]) ----
     val depends: Array<ArrayList<Int>> = Array(n) { ArrayList() }
     val connectedToStart = BooleanArray(n)
@@ -36,6 +49,13 @@ class PassiveSpec(val tree: PassiveTree) {
     val path: Array<IntArray?> = arrayOfNulls(n)
     val pathRoot = IntArray(n) { -1 }
     val views: Array<NodeView> = Array(n) { nodes[it].baseView }
+    /**
+     * Sockets and keystones that let each node be allocated without being connected to the tree
+     * (PoB `intuitiveLeapLikesAffecting`).
+     */
+    val leapAffecting: Array<IntArray> = Array(n) { NONE }
+    /** Class starts of other classes the tree may be connected to (jewels). */
+    private val altStart = BooleanArray(n)
 
     private val visitedFlag = BooleanArray(n)
 
@@ -45,6 +65,15 @@ class PassiveSpec(val tree: PassiveTree) {
     init {
         selectClass(classId)
     }
+
+    /** Sets the jewels of the open build ([known] = false while they are not known yet) and rebuilds. */
+    fun setJewels(value: TreeJewels, known: Boolean) {
+        jewels = value
+        jewelsKnown = known
+        rebuild()
+    }
+
+    fun canAllocateUnconnected(node: Int) = leapAffecting[node].isNotEmpty()
 
     // ---------------------------------------------------------------------------------------
     // Class / ascendancy
@@ -163,7 +192,7 @@ class PassiveSpec(val tree: PassiveTree) {
     fun isGlobalAllocationBlocked(node: Int): Boolean {
         val t = nodes[node]
         if (!t.isGlobal || alloc[node] || path[node] == null) return false
-        return currentAllocMode > 0 || isConnectedToWeaponSetNodes(node)
+        return currentAllocMode > 0 || (leapAffecting[node].isEmpty() && isConnectedToWeaponSetNodes(node))
     }
 
     fun isGlobalDeallocationBlocked(node: Int): Boolean {
@@ -229,6 +258,8 @@ class PassiveSpec(val tree: PassiveTree) {
     /** The path that allocating [node] would actually allocate, including weapon-set promotion. */
     fun effectiveAllocationPath(node: Int): IntArray? {
         val base = path[node] ?: return null
+        // Allocated on its own through a jewel (PoB AllocNode)
+        if (leapAffecting[node].isNotEmpty()) return intArrayOf(node)
         val root = pathRoot[node]
         val rootMode = if (root >= 0) allocMode[root] else 0
         if (rootMode == 0) return base
@@ -250,6 +281,15 @@ class PassiveSpec(val tree: PassiveTree) {
 
     fun allocNode(node: Int) {
         if (path[node] == null) return
+        if (leapAffecting[node].isNotEmpty()) {
+            // Allocated without its path (PoB AllocNode)
+            val t = nodes[node]
+            alloc[node] = true
+            allocMode[node] = if (t.ascendancyName != null || t.isGlobal) 0 else currentAllocMode
+            if (t.isAttribute) setAttribute(node, attributeIndex)
+            rebuild()
+            return
+        }
         val p = effectiveAllocationPath(node) ?: return
         allocPath(p, node)
         rebuild()
@@ -380,7 +420,22 @@ class PassiveSpec(val tree: PassiveTree) {
     fun rebuild() {
         val cls = currentClass
         val asc = currentAscendancy
+        val j = jewels
+        val radii = j.radii
 
+        // Other classes' starts the tree can connect to, through jewels in allocated sockets
+        altStart.fill(false)
+        val altStarts = ArrayList<Int>()
+        for (sj in j.sockets) {
+            if (alloc[sj.socket] && sj.alternateStart >= 0 && !altStart[sj.alternateStart]) {
+                altStart[sj.alternateStart] = true
+                altStarts += sj.alternateStart
+            }
+        }
+        // Allocation near allocated keystones, from allocated ascendancy passives
+        val leapMaps = j.leapSources.filter { alloc[it.node] }
+
+        val leapList = ArrayList<Int>()
         for (i in 0 until n) {
             val t = nodes[i]
             depends[i].clear()
@@ -393,16 +448,40 @@ class PassiveSpec(val tree: PassiveTree) {
             if (t.isAttribute && attributeOverride[i] in 1..t.attributeOptions.size) {
                 view = view.with(t.attributeOptions[attributeOverride[i] - 1])
             }
+            j.replaced[i]?.let { r -> view = view.copy(name = r.name, icon = r.icon ?: view.icon) }
             views[i] = view
             if (alloc[i]) depends[i] += i
+
+            // Jewels allowing allocation without a connection (PoB intuitiveLeapLikesAffecting)
+            leapList.clear()
+            if (t.type != NodeType.ClassStart && t.type != NodeType.Socket && t.ascendancyName == null) {
+                for (sj in j.sockets) {
+                    if (sj.radiusIndex <= 0 || !alloc[sj.socket] || sj.limitDisabled) continue
+                    if (sj.leap && radiusIndex.contains(sj.socket, radii, sj.radiusIndex, i)) leapList += sj.socket
+                    for (k in sj.fromNothing) {
+                        if (radiusIndex.contains(k, radii, sj.radiusIndex, i)) leapList += sj.socket
+                    }
+                }
+                for (m in leapMaps) {
+                    if (t.type !in m.to || m.from != "Keystone") continue
+                    for (k in keystones) {
+                        if (alloc[k] && radiusIndex.contains(k, radii, m.radiusIndex, i)) leapList += k
+                    }
+                }
+            }
+            leapAffecting[i] = if (leapList.isEmpty()) NONE else leapList.toIntArray()
         }
         for (i in 0 until n) {
             val c = nodes[i].unlockIdx ?: continue
             for (cid in c) depends[cid] += i
         }
 
-        // Dependencies and orphan pruning
+        // Dependencies and orphan pruning (PoB BuildAllDependsAndPaths)
         val visited = ArrayList<Int>()
+        // Nodes allocated through jewels that may depend on a node, and allocated nodes in the radius
+        // of a jewel socket or keystone that may depend on a node
+        val potentialDeps = HashMap<Int, ArrayList<Int>>()
+        val intuitiveLeaps = HashMap<Int, ArrayList<Int>>()
         for (i in 0 until n) {
             if (!alloc[i]) continue
             val t = nodes[i]
@@ -411,7 +490,7 @@ class PassiveSpec(val tree: PassiveTree) {
             var anyStartFound = t.type.isStart || t.isFreeAllocate
             if (t.isFreeAllocate) connectedToStart[i] = true
             for (other in t.linked) {
-                if (alloc[other] && canPathThroughAllocMode(allocMode[i], other) && other !in depends[i]) {
+                if ((alloc[other] || altStart[other]) && canPathThroughAllocMode(allocMode[i], other) && other !in depends[i]) {
                     if (nodes[other].type.isStart) {
                         anyStartFound = true
                         connectedToStart[i] = true
@@ -423,7 +502,20 @@ class PassiveSpec(val tree: PassiveTree) {
                     } else {
                         // Everything visited is only connected through this node
                         for (v in visited) {
-                            depends[i] += v
+                            if (leapAffecting[v].isNotEmpty()) {
+                                potentialDeps.getOrPut(v) { ArrayList() } += i
+                            } else {
+                                depends[i] += v
+                            }
+                            // Nodes in the radius of a keystone allowing allocation may depend on it
+                            for (m in leapMaps) {
+                                if (t.type !in m.to || m.from != nodes[v].type.pobName) continue
+                                for (a in 0 until n) {
+                                    if (alloc[a] && radiusIndex.contains(v, radii, m.radiusIndex, a)) intuitiveLeaps.getOrPut(i) { ArrayList() } += a
+                                }
+                            }
+                            val inRadius = nodesInLeapRadius(v)
+                            if (inRadius.isNotEmpty()) intuitiveLeaps.getOrPut(i) { ArrayList() } += inRadius
                             visitedFlag[v] = false
                         }
                         visited.clear()
@@ -431,19 +523,71 @@ class PassiveSpec(val tree: PassiveTree) {
                 }
             }
             visitedFlag[i] = false
-            if (!anyStartFound) {
-                for (dep in depends[i]) deallocRaw(dep)
+            if (!anyStartFound && jewelsKnown) {
+                // An orphan: prune it and what depends on it, except nodes a jewel keeps allocated
+                for (dep in depends[i].toList()) {
+                    var prune = true
+                    for (sj in j.sockets) {
+                        if (!alloc[sj.socket] || sj.radiusIndex <= 0) continue
+                        val kept = (sj.leap && radiusIndex.contains(sj.socket, radii, sj.radiusIndex, dep)) ||
+                            sj.fromNothing.any { k -> radiusIndex.contains(k, radii, sj.radiusIndex, dep) }
+                        if (kept) {
+                            prune = false
+                            intuitiveLeaps.getOrPut(sj.socket) { ArrayList() } += dep
+                            break
+                        }
+                    }
+                    for (m in j.leapSources) {
+                        if (!alloc[m.node] || nodes[dep].type !in m.to || m.from != "Keystone") continue
+                        for (k in keystones) {
+                            if (radiusIndex.contains(k, radii, m.radiusIndex, dep)) {
+                                prune = false
+                                intuitiveLeaps.getOrPut(k) { ArrayList() } += dep
+                            }
+                        }
+                    }
+                    if (prune) deallocRaw(dep)
+                }
             }
         }
         for (i in 0 until n) if (!alloc[i]) connectedToStart[i] = false
 
-        // Paths (multi-source 0-1 BFS from all allocated nodes)
+        // Nodes allocated through jewels depend on the nodes connecting every jewel they rely on
+        for ((v, deps) in potentialDeps) {
+            val providers = leapAffecting[v]
+            for (d in deps.distinct()) {
+                if (providers.all { it in depends[d] } && v !in depends[d]) depends[d] += v
+            }
+        }
+        for ((k, deps) in intuitiveLeaps) {
+            for (dep in deps.distinct()) {
+                if (connectedToStart[dep]) continue
+                if (leapAffecting[dep].all { it in depends[k] } && dep !in depends[k]) depends[k] += dep
+            }
+        }
+
+        // Paths (multi-source 0-1 BFS from the allocated nodes connected to the tree)
         for (i in 0 until n) {
-            pathDist[i] = if (alloc[i]) 0 else 1000
+            pathDist[i] = if (alloc[i] && leapAffecting[i].isEmpty()) 0 else 1000
             path[i] = null
             pathRoot[i] = -1
         }
-        buildNodePathsToRootNodes((0 until n).filter { alloc[it] })
+        buildNodePathsToRootNodes((0 until n).filter { alloc[it] && (leapAffecting[it].isEmpty() || connectedToStart[it]) })
+        if (altStarts.isNotEmpty()) buildNodePathsToRootNodes(altStarts)
+    }
+
+    /** Allocated nodes a jewel in [socket] allows to be allocated without a connection (PoB NodesInIntuitiveLeapLikeRadius). */
+    private fun nodesInLeapRadius(socket: Int): List<Int> {
+        val sj = jewels.bySocket[socket] ?: return emptyList()
+        if (sj.radiusIndex <= 0) return emptyList()
+        val out = ArrayList<Int>()
+        val radii = jewels.radii
+        for (a in 0 until n) {
+            if (!alloc[a]) continue
+            if (sj.leap && radiusIndex.contains(socket, radii, sj.radiusIndex, a)) out += a
+            for (k in sj.fromNothing) if (radiusIndex.contains(k, radii, sj.radiusIndex, a)) out += a
+        }
+        return out
     }
 
     private fun findStartFromNode(node: Int, visited: ArrayList<Int>, noAscend: Boolean, mode: Int): Boolean {
@@ -453,7 +597,7 @@ class PassiveSpec(val tree: PassiveTree) {
         val nodeAsc = t.ascendancyName
         for (other in t.linked) {
             val startIndex = visited.size
-            if (alloc[other] && canPathThroughAllocMode(mode, other)) {
+            if ((alloc[other] || altStart[other]) && canPathThroughAllocMode(mode, other)) {
                 val otherT = nodes[other]
                 if (otherT.type.isStart || (!visitedFlag[other] && findStartFromNode(other, visited, noAscend, mode))) {
                     if (nodeAsc != null && otherT.ascendancyName == null) {
@@ -567,6 +711,20 @@ class PassiveSpec(val tree: PassiveTree) {
         if (start >= 0) alloc[start] = true
     }
 }
+
+private val NONE = IntArray(0)
+
+/** PoB's `node.type` string. */
+private val NodeType.pobName
+    get() = when (this) {
+        NodeType.ClassStart -> "ClassStart"
+        NodeType.AscendClassStart -> "AscendClassStart"
+        NodeType.OnlyImage -> "OnlyImage"
+        NodeType.Socket -> "Socket"
+        NodeType.Keystone -> "Keystone"
+        NodeType.Notable -> "Notable"
+        NodeType.Normal -> "Normal"
+    }
 
 private fun NodeView.with(o: NodeOption) = NodeView(
     name = o.name ?: name,

@@ -97,15 +97,22 @@ class MemoryTest {
             .flatMap { i -> config.getJSONArray("sections").getJSONObject(i).getJSONArray("rows").let { r -> (0 until r.length()).map { r.getJSONObject(it) } } }
             .first { it.optString("type") == "check" }.getInt("idx")
         val weapon = api.callObject("items").getJSONArray("slots").getJSONObject(0).getInt("itemId")
-        val start = liveMb()
-        for (i in 1..30) {
-            api.callObject("setConfig", mapOf("idx" to idx, "value" to (i % 2 == 0)))
-            api.callObject("skillEdit", mapOf("op" to "gemLevel", "group" to 1, "gem" to 1, "value" to if (i % 2 == 0) 20 else 19))
-            api.callObject("itemEdit", mapOf("op" to "equip", "slot" to "Weapon 1", "id" to if (i % 2 == 0) weapon else 0))
-            api.callObject("select", mapOf("useSecondWeaponSet" to (i % 2 == 0)))
+        fun edits(count: Int) {
+            for (i in 1..count) {
+                api.callObject("setConfig", mapOf("idx" to idx, "value" to (i % 2 == 0)))
+                api.callObject("skillEdit", mapOf("op" to "gemLevel", "group" to 1, "gem" to 1, "value" to if (i % 2 == 0) 20 else 19))
+                api.callObject("itemEdit", mapOf("op" to "equip", "slot" to "Weapon 1", "id" to if (i % 2 == 0) weapon else 0))
+                api.callObject("select", mapOf("useSecondWeaponSet" to (i % 2 == 0)))
+            }
         }
+        val start = liveMb()
+        // The tabs' undo histories fill up to PoB's limit (100 states), then stop growing
+        edits(110)
+        val full = liveMb()
+        edits(30)
         val end = liveMb()
-        println("edits: live %.1f -> %.1f MB".format(start, end))
-        assertTrue("live heap grew from $start to $end MB", end < start + 3)
+        println("edits: live %.1f MB, with full undo histories %.1f MB, after more edits %.1f MB".format(start, full, end))
+        assertTrue("undo histories take ${full - start} MB", full < start + 10)
+        assertTrue("live heap grew from $full to $end MB", end < full + 3)
     }
 }

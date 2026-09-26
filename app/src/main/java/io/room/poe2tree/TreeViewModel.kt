@@ -11,11 +11,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.geometry.Offset
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.room.poe2tree.engine.AssetFiles
 import io.room.poe2tree.engine.CalcSession
+import io.room.poe2tree.engine.EngineStatus
+import io.room.poe2tree.engine.PowerResult
+import io.room.poe2tree.engine.PowerStat
 import io.room.poe2tree.engine.PobEngine
 import io.room.poe2tree.io.BuildStore
 import io.room.poe2tree.io.PobCode
@@ -24,7 +28,9 @@ import io.room.poe2tree.io.SavedBuild
 import io.room.poe2tree.tree.NodeType
 import io.room.poe2tree.tree.PassiveSpec
 import io.room.poe2tree.tree.PassiveTree
+import io.room.poe2tree.tree.TreeJewels
 import io.room.poe2tree.tree.TreeText
+import io.room.poe2tree.tree.parseTreeJewels
 import io.room.poe2tree.ui.Camera
 import io.room.poe2tree.ui.RenderState
 import io.room.poe2tree.ui.SpriteCache
@@ -37,6 +43,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sqrt
 
 sealed interface LoadState {
     data object Loading : LoadState
@@ -117,6 +124,25 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
     var pendingClassChange by mutableStateOf<PendingClassChange?>(null)
         private set
 
+    /** Jewels and items acting on the tree of the open build, from the engine. */
+    var jewels by mutableStateOf(TreeJewels.EMPTY)
+        private set
+    private var jewelsSource: String? = null
+
+    // ---- Node power heat map (PoB's tree heat map) ----
+    var heatMap by mutableStateOf(false)
+        private set
+    /** 1-based index into [powerStats]: 1 is PoB's combined offence / defence map. */
+    var heatStat by mutableIntStateOf(1)
+        private set
+    /** Only passives up to this many points away (PoB's depth limit); null: all. */
+    var heatDepth by mutableStateOf<Int?>(10)
+        private set
+    var powerStats by mutableStateOf<List<PowerStat>>(emptyList())
+        private set
+    private var heatSource: PowerResult? = null
+    private var heatColours: IntArray? = null
+
     var canUndo by mutableStateOf(false)
         private set
     var canRedo by mutableStateOf(false)
@@ -185,6 +211,17 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
                     else tree.sprites.keys // per-sprite drawing: load everything small up front
                 )
                 renderer = TreeRenderer(tree, sprites)
+                viewModelScope.launch {
+                    snapshotFlow { calc.state to calc.status }.collect { (state, status) ->
+                        if (status is EngineStatus.Failed) applyJewels(null) else state?.overlay?.let { applyJewels(it) }
+                    }
+                }
+                // The heat map follows every change of the calculated build
+                viewModelScope.launch {
+                    snapshotFlow { listOf(heatMap, heatStat, heatDepth, calc.dataRevision, calc.ready) }.collect {
+                        if (heatMap && calc.ready) calc.startPower(heatStat, heatDepth, treeSeq) else calc.stopPower()
+                    }
+                }
                 val last = loaded.lastBuild
                 val t4 = SystemClock.elapsedRealtime()
                 if (last != null) applyBuild(last) else createBuild("My build", DEFAULT_CLASS)
@@ -282,6 +319,50 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // =======================================================================================
+    // Node power heat map
+    // =======================================================================================
+
+    fun setHeatMap(on: Boolean, stat: Int = heatStat, depth: Int? = heatDepth) {
+        heatStat = stat
+        heatDepth = depth
+        heatMap = on
+        loadPowerStats()
+    }
+
+    /** The heat map's statistics (PoB's list), read from the engine once. */
+    fun loadPowerStats() {
+        if (powerStats.isEmpty()) viewModelScope.launch { calc.powerStats()?.let { powerStats = it } }
+    }
+
+    /**
+     * Colour of each node's art in the heat map (PoB PassiveTreeView, RED/BLUE theme): red for
+     * offence (or the chosen statistic), blue for defence, relative to the most powerful node.
+     */
+    private fun heatColours(): IntArray? {
+        if (!heatMap) return null
+        val p = calc.power ?: return null
+        if (p === heatSource) return heatColours
+        fun level(value: Double, max: Double): Float =
+            if (max > 0 && value > 0) sqrt(value / max * 1.5).toFloat().coerceIn(0f, 1f) else 0f
+        fun channel(v: Float) = (v * 255).toInt().coerceIn(0, 255)
+        val out = IntArray(tree.nodes.size)
+        for (node in tree.nodes) {
+            val np = p.nodes[node.id]
+            out[node.idx] = if (p.single) {
+                android.graphics.Color.rgb(channel(level(np?.single ?: 0.0, p.maxSingle)), 0, 0)
+            } else {
+                val dps = level(np?.offence ?: 0.0, p.maxOffence)
+                val def = level(np?.defence ?: 0.0, p.maxDefence)
+                val mix = (max(dps - 0.5f, 0f) + max(def - 0.5f, 0f)) / 2f
+                android.graphics.Color.rgb(channel(dps), channel(mix), channel(def))
+            }
+        }
+        heatSource = p
+        heatColours = out
+        return out
+    }
+
+    // =======================================================================================
     // Rendering state
     // =======================================================================================
 
@@ -300,7 +381,7 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-        return RenderState(camera, selected, cachedPath, cachedDep, searchMatches)
+        return RenderState(camera, selected, cachedPath, cachedDep, searchMatches, heatColours())
     }
 
     // =======================================================================================
@@ -588,6 +669,28 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
         refreshSearch()
     }
 
+    /**
+     * The engine's jewels for the open build (null: the engine is not available). PoB's pathing rules
+     * then apply: nodes no longer connected to the tree nor allocatable through a jewel are removed.
+     */
+    private fun applyJewels(overlay: org.json.JSONObject?) {
+        val key = overlay?.toString() ?: ""
+        if (key == jewelsSource && spec.jewelsKnown) return
+        jewelsSource = key
+        val j = overlay?.let { parseTreeJewels(it, tree) } ?: TreeJewels.EMPTY
+        val before = spec.snapshot()
+        spec.setJewels(j, known = true)
+        jewels = j
+        revision++
+        val after = spec.snapshot()
+        if (after != before) {
+            setRoute(null)
+            save()
+            syncTree(after)
+        }
+        refreshSearch()
+    }
+
     /** Sends the allocated tree to the calculation engine. */
     private fun syncTree(snapshot: PassiveSpec.Snapshot = spec.snapshot()) {
         treeSeq++
@@ -634,6 +737,41 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
         afterHistoryChange()
     }
 
+    /** PoB tab whose history the undo / redo buttons use on the current screen; null for the tree's. */
+    private val engineUndoTab: String?
+        get() = when (screen) {
+            Screen.Skills -> "skills"
+            Screen.Items -> "items"
+            Screen.Config -> "config"
+            Screen.Calcs -> "calcs"
+            Screen.Tree, Screen.Stats -> null
+        }
+
+    /** Undo / redo of the current screen: the tree's history, or the PoB tab's (nothing on Stats). */
+    val screenCanUndo: Boolean
+        get() = when (screen) {
+            Screen.Tree -> canUndo
+            Screen.Stats -> false
+            else -> calc.state?.undo?.get(engineUndoTab)?.undo == true
+        }
+    val screenCanRedo: Boolean
+        get() = when (screen) {
+            Screen.Tree -> canRedo
+            Screen.Stats -> false
+            else -> calc.state?.undo?.get(engineUndoTab)?.redo == true
+        }
+
+    fun screenUndo() = screenHistory(redo = false)
+    fun screenRedo() = screenHistory(redo = true)
+
+    private fun screenHistory(redo: Boolean) {
+        when (screen) {
+            Screen.Tree -> if (redo) redo() else undo()
+            Screen.Stats -> Unit
+            else -> calc.undo(engineUndoTab ?: return, redo)
+        }
+    }
+
     private fun afterHistoryChange() {
         setRoute(null)
         updateUndoFlags()
@@ -675,6 +813,10 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
         settings = build.settings
         spec.currentAllocMode = 0
         allocMode = 0
+        // Until the engine has the build's jewels, nodes allocated through them are kept
+        jewelsSource = null
+        jewels = TreeJewels.EMPTY
+        spec.setJewels(TreeJewels.EMPTY, known = calc.status is EngineStatus.Failed)
         spec.restore(build.snapshot)
         undoStack.clear()
         redoStack.clear()

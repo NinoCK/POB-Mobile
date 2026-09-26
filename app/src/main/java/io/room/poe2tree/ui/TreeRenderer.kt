@@ -17,6 +17,8 @@ import io.room.poe2tree.tree.NodeState
 import io.room.poe2tree.tree.NodeType
 import io.room.poe2tree.tree.PassiveSpec
 import io.room.poe2tree.tree.PassiveTree
+import io.room.poe2tree.tree.SocketJewel
+import io.room.poe2tree.tree.TreeJewels
 import kotlin.math.atan2
 import kotlin.math.max
 
@@ -37,6 +39,8 @@ class RenderState(
     /** Nodes that would be removed if the selected (allocated) node is deallocated. */
     val hoverDep: BooleanArray?,
     val searchMatches: BooleanArray?,
+    /** Heat map colour of each node's art (unallocated nodes), or null. */
+    val heat: IntArray? = null,
 )
 
 /**
@@ -105,6 +109,7 @@ class TreeRenderer(private val tree: PassiveTree, private val sprites: SpriteCac
         } else {
             drawSimplified(canvas, spec, state, vx0, vy0, vx1, vy1)
         }
+        drawJewelRadii(canvas, spec, state)
         drawHighlights(canvas, spec, state, vx0, vy0, vx1, vy1)
         canvas.restore()
     }
@@ -169,6 +174,9 @@ class TreeRenderer(private val tree: PassiveTree, private val sprites: SpriteCac
         }
     }
 
+    /** Allocated, or allocated by an item (PoB draws both as allocated). */
+    private fun drawnAlloc(spec: PassiveSpec, i: Int) = spec.alloc[i] || spec.jewels.isGranted(i)
+
     private fun unlockMet(spec: PassiveSpec, idx: Int): Boolean {
         val c = tree.nodes[idx].unlockIdx ?: return true
         return c.all { spec.alloc[it] }
@@ -184,7 +192,7 @@ class TreeRenderer(private val tree: PassiveTree, private val sprites: SpriteCac
             if (node.x + size < vx0 || node.x - size > vx1 || node.y + size < vy0 || node.y - size > vy1) continue
             if (!unlockMet(spec, node.idx)) continue
             val lit = node.type != NodeType.OnlyImage &&
-                (spec.alloc[node.idx] || state.hoverPath?.get(node.idx) == true)
+                (drawnAlloc(spec, node.idx) || state.hoverPath?.get(node.idx) == true)
             drawSprite(canvas, image, node.x, node.y, size, size, scale, alpha = if (lit) 255 else 38)
         }
     }
@@ -214,7 +222,7 @@ class TreeRenderer(private val tree: PassiveTree, private val sprites: SpriteCac
         if (hp != null && isHoverPathEndpoint(spec, state, a) && isHoverPathEndpoint(spec, state, b) && hp[a] && hp[b] &&
             (willChangeAllocMode(spec, state, a) || willChangeAllocMode(spec, state, b))
         ) return 1
-        if (spec.alloc[a] && spec.alloc[b] && (m1 == 0 || m2 == 0 || m1 == m2)) return 2
+        if (drawnAlloc(spec, a) && drawnAlloc(spec, b) && (m1 == 0 || m2 == 0 || m1 == m2)) return 2
         if (hp != null && isHoverPathEndpoint(spec, state, a) && isHoverPathEndpoint(spec, state, b) &&
             (!spec.alloc[a] || !spec.alloc[b] || (hp[a] && hp[b]))
         ) return 1
@@ -399,7 +407,11 @@ class TreeRenderer(private val tree: PassiveTree, private val sprites: SpriteCac
             atlas = sprites.atlases.lastOrNull()
         }
         if (atlas != null) {
-            if (icon != null) batchSprite(canvas, atlasFor(iconHalf * 2 * scale) ?: atlas, icon, x, y, iconHalf, iconColor)
+            if (icon != null) {
+                val iconAtlas = atlasFor(iconHalf * 2 * scale) ?: atlas
+                if (iconAtlas.rect(icon) != null) batchSprite(canvas, iconAtlas, icon, x, y, iconHalf, iconColor)
+                else drawSprite(canvas, icon, x, y, iconHalf, iconHalf, scale, iconColor)
+            }
             if (frame != null) batchSprite(canvas, atlas, frame, x, y, frameHalf, frameColor)
         } else {
             if (icon != null) drawSprite(canvas, icon, x, y, iconHalf, iconHalf, scale, iconColor)
@@ -412,13 +424,15 @@ class TreeRenderer(private val tree: PassiveTree, private val sprites: SpriteCac
         val hp = state.hoverPath
         val dep = state.hoverDep
         val selected = state.selected
+        val radiusTints = radiusTints(spec, selected)
+        val socketArt = ArrayList<Int>()
         for (node in tree.nodes) {
             val i = node.idx
             if (node.type == NodeType.ClassStart || node.type == NodeType.OnlyImage) continue
             val r = max(node.targetSize.overlay, node.targetSize.base)
             if (node.x + r < vx0 || node.x - r > vx1 || node.y + r < vy0 || node.y - r > vy1) continue
             if (!unlockMet(spec, i)) continue
-            val alloc = spec.alloc[i]
+            val alloc = drawnAlloc(spec, i)
             val view = spec.views[i]
 
             if (node.type == NodeType.AscendClassStart) {
@@ -437,6 +451,8 @@ class TreeRenderer(private val tree: PassiveTree, private val sprites: SpriteCac
                 val color = if (dep?.get(i) == true && i != selected) RED else WHITE
                 drawNodeArt(canvas, scale, node.x, node.y, null, 0f, WHITE,
                     view.overlay?.forState(nodeState), node.targetSize.base, color)
+                // The socketed jewel's art, drawn over the batched frames below
+                if (alloc && spec.jewels.bySocket[i] != null) socketArt += i
                 continue
             }
 
@@ -448,13 +464,122 @@ class TreeRenderer(private val tree: PassiveTree, private val sprites: SpriteCac
                 else -> WHITE
             }
             if (selected >= 0 && selected != i && dep?.get(i) == true) frameColor = RED
+            else if (radiusTints != null && radiusTints[i] != 0) frameColor = radiusTints[i]
+            val heat = state.heat
             drawNodeArt(
                 canvas, scale, node.x, node.y,
-                view.icon, node.targetSize.base, if (alloc) WHITE else HALF_GRAY,
+                view.icon, node.targetSize.base, if (alloc) WHITE else heat?.get(i) ?: HALF_GRAY,
                 view.overlay?.forState(nodeState), node.targetSize.overlay, frameColor,
             )
         }
         for (atlas in sprites.atlases) atlasBatches[atlas]?.flush(canvas)
+        for (i in socketArt) {
+            val node = tree.nodes[i]
+            val art = jewelArt(spec.jewels.bySocket[i]!!) ?: continue
+            drawSprite(canvas, art, node.x, node.y, node.targetSize.overlay, node.targetSize.overlay, scale)
+        }
+    }
+
+    // ---- Jewels (PoB PassiveTreeView: socket art, radius rings, radius of the hovered socket) ----
+
+    /** Socket art of a jewel: a unique's own art when the tree has it, else its base type's. */
+    private fun jewelArt(j: SocketJewel): String? =
+        j.title?.takeIf { j.rarity == "UNIQUE" && tree.sprites.containsKey(it) } ?: j.baseName?.takeIf { tree.sprites.containsKey(it) }
+
+    private var tintKey: Pair<Int, TreeJewels>? = null
+    private var tintCache: IntArray? = null
+
+    /**
+     * With a jewel socket selected, the colour of the smallest jewel radius each node is in (rings
+     * for a jewel with a ring radius, discs otherwise), like hovering a socket in PoB. Null otherwise.
+     */
+    private fun radiusTints(spec: PassiveSpec, selected: Int): IntArray? {
+        if (selected < 0 || !isRadiusSocket(selected)) return null
+        val jewels = spec.jewels
+        val key = selected to jewels
+        if (key == tintKey) return tintCache
+        val radii = jewels.radii
+        val variable = jewels.bySocket[selected]?.variable == true
+        val sets = spec.radiusIndex.of(selected, radii)
+        val out = IntArray(tree.nodes.size)
+        for (i in out.indices) {
+            for ((r, radius) in radii.withIndex()) {
+                if ((radius.inner > 0f) == variable && sets[r][i]) {
+                    out[i] = radius.color
+                    break
+                }
+            }
+        }
+        tintKey = key
+        tintCache = out
+        return out
+    }
+
+    private fun isRadiusSocket(i: Int): Boolean {
+        val node = tree.nodes[i]
+        return node.type == NodeType.Socket && !node.containJewelSocket && node.name != "Charm Socket"
+    }
+
+    private fun drawRingPair(canvas: Canvas, first: String, second: String, x: Float, y: Float, half: Float, scale: Float, alpha: Int) {
+        if (half <= 0f) return
+        drawSprite(canvas, first, x, y, half, half, scale, alpha = alpha)
+        drawSprite(canvas, second, x, y, half, half, scale, alpha = alpha)
+    }
+
+    private fun drawJewelRadii(canvas: Canvas, spec: PassiveSpec, state: RenderState) {
+        val scale = state.camera.scale
+        val jewels = spec.jewels
+        for (sj in jewels.sockets) {
+            val socket = tree.nodes[sj.socket]
+            if (!spec.alloc[sj.socket] || !isRadiusSocket(sj.socket)) continue
+            val radius = jewels.radius(sj.radiusIndex) ?: continue
+            val outer = radius.outer
+            val conqueror = sj.conqueror
+            if (conqueror != null) {
+                // Conquering jewels have their own circle art
+                val (c1, c2) = if (conqueror == "abyss") {
+                    val a = "art/textures/interface/2d/2dart/uiimages/ingame/abyss/abysspassiveskillscreenjewelcircle1.dds"
+                    a to a
+                } else {
+                    val name = if (conqueror == "kalguur") "kalguuran" else conqueror
+                    "art/textures/interface/2d/2dart/uiimages/ingame/passiveskillscreen${name}jewelcircle1.dds" to
+                        "art/textures/interface/2d/2dart/uiimages/ingame/passiveskillscreen${name}jewelcircle2.dds"
+                }
+                drawRingPair(canvas, c1, c2, socket.x, socket.y, outer, scale, RING_ALPHA)
+            } else if (sj.fromNothing.isNotEmpty()) {
+                // From Nothing: the ring is around the keystone
+                for (k in sj.fromNothing) {
+                    val key = tree.nodes[k]
+                    drawRingPair(canvas, "ShadedOuterRing", "ShadedOuterRingFlipped", key.x, key.y, outer, scale, RING_ALPHA)
+                    drawRingPair(canvas, "ShadedInnerRing", "ShadedInnerRingFlipped", key.x, key.y, 150f, scale, RING_ALPHA)
+                }
+            } else {
+                drawRingPair(canvas, "ShadedOuterRing", "ShadedOuterRingFlipped", socket.x, socket.y, outer, scale, RING_ALPHA)
+                drawRingPair(canvas, "ShadedInnerRing", "ShadedInnerRingFlipped", socket.x, socket.y, radius.inner * 1.06f, scale, RING_ALPHA)
+            }
+        }
+        // Passives allowing allocation near allocated keystones
+        for (source in jewels.leapSources) {
+            if (!spec.alloc[source.node] || source.from != "Keystone") continue
+            val radius = jewels.radius(source.radiusIndex) ?: continue
+            for (key in tree.nodes) {
+                if (key.type != NodeType.Keystone || !spec.alloc[key.idx]) continue
+                drawRingPair(canvas, "ShadedOuterRing", "ShadedOuterRingFlipped", key.x, key.y, radius.outer, scale, RING_ALPHA)
+            }
+        }
+        // The radii of the selected socket, in PoB's colours
+        val sel = state.selected
+        if (sel >= 0 && isRadiusSocket(sel) && jewels.radii.isNotEmpty()) {
+            val node = tree.nodes[sel]
+            val variable = jewels.bySocket[sel]?.variable == true
+            ringPaint.strokeWidth = 3f / scale
+            for (radius in jewels.radii) {
+                if ((radius.inner > 0f) != variable) continue
+                ringPaint.color = radius.color
+                canvas.drawCircle(node.x, node.y, radius.outer, ringPaint)
+                if (radius.inner > 0f) canvas.drawCircle(node.x, node.y, radius.inner, ringPaint)
+            }
+        }
     }
 
     // ---- Zoomed-out view: simple shapes are much cheaper than thousands of bitmaps ----
@@ -515,7 +640,7 @@ class TreeRenderer(private val tree: PassiveTree, private val sprites: SpriteCac
             if (node.type == NodeType.ClassStart || node.type == NodeType.OnlyImage) continue
             if (node.x < vx0 || node.x > vx1 || node.y < vy0 || node.y > vy1) continue
             if (!unlockMet(spec, i)) continue
-            val alloc = spec.alloc[i]
+            val alloc = drawnAlloc(spec, i)
             val base = when (node.type) {
                 NodeType.Keystone -> 4.5f
                 NodeType.Notable, NodeType.Socket -> 3.2f
@@ -537,6 +662,8 @@ class TreeRenderer(private val tree: PassiveTree, private val sprites: SpriteCac
             if (dep?.get(i) == true && i != state.selected) color = RED
             if (node.ascendancyName != null && !isCurrentAscendancy(spec, node.ascendancyName) && !alloc) {
                 color = SIMPLE_INACTIVE
+            } else if (!alloc && state.heat != null && hp?.get(i) != true && node.type != NodeType.AscendClassStart) {
+                color = state.heat[i]
             }
             val radius = max(base * px, node.targetSize.base * 0.8f)
             val dots = dotBatch
@@ -685,6 +812,8 @@ class TreeRenderer(private val tree: PassiveTree, private val sprites: SpriteCac
         const val WS1 = 0xFFDD0022.toInt()
         const val WS2 = 0xFF33FF77.toInt()
         private const val SEARCH = 0xFFFF3030.toInt()
+        /** PoB draws jewel radius rings at 70% opacity. */
+        private const val RING_ALPHA = 179
         private const val SELECTED = 0xFFFFE08A.toInt()
 
         private const val SIMPLE_NORMAL = 0xFF4A4538.toInt()

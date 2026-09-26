@@ -95,10 +95,21 @@ data class EngineState(
     val droppedNodes: List<Int>,
     /** Opening the build changed it (tree or level differed from its XML). */
     val changed: Boolean = false,
+    /** What PoB's tabs can undo / redo, by tab ("skills", "items", "config", "calcs"). */
+    val undo: Map<String, UndoFlags> = emptyMap(),
+    /** Jewels and items acting on the tree (api.treeOverlay), read with parseTreeJewels. */
+    val overlay: JSONObject? = null,
 )
 
+data class UndoFlags(val undo: Boolean, val redo: Boolean)
+
 /** Stat changes shown for a node (PassiveTreeView tooltip). */
-data class NodeCompare(val lines: List<String>, val count: Int)
+data class NodeCompare(
+    val lines: List<String>,
+    val count: Int,
+    /** PoB's text for the node (name, stats as changed by jewels...; "" separates sections). */
+    val info: List<String> = emptyList(),
+)
 
 object EngineJson {
 
@@ -111,6 +122,10 @@ object EngineJson {
             levelAuto = o.optBoolean("levelAuto"),
             droppedNodes = tree?.optJSONArray("dropped")?.ints().orEmpty(),
             changed = o.optBoolean("changed"),
+            overlay = o.optJSONObject("overlay"),
+            undo = o.optJSONObject("undo")?.let { u ->
+                u.keys().asSequence().associateWith { k -> u.getJSONObject(k).let { UndoFlags(it.optBoolean("undo"), it.optBoolean("redo")) } }
+            }.orEmpty(),
         )
     }
 
@@ -189,7 +204,9 @@ object EngineJson {
         )
     }
 
-    fun nodeCompare(o: JSONObject) = NodeCompare(o.optJSONArray("lines")?.strings().orEmpty(), o.optInt("count"))
+    fun nodeCompare(o: JSONObject) = NodeCompare(
+        o.optJSONArray("lines")?.strings().orEmpty(), o.optInt("count"), o.optJSONArray("info")?.strings().orEmpty(),
+    )
 }
 
 internal fun JSONObject.optStringOrNull(key: String): String? =
@@ -201,3 +218,58 @@ internal fun JSONObject.optDoubleOrNull(key: String): Double? =
 internal fun JSONArray.strings(): List<String> = (0 until length()).map { optString(it) }
 
 internal fun JSONArray.ints(): List<Int> = (0 until length()).map { optInt(it) }
+
+/** A statistic for the node power heat map (PoB TreeTab.powerStatList; the first is offence / defence). */
+data class PowerStat(val label: String, val stat: String?)
+
+/** Power of a node: [single] for a single statistic, [offence] / [defence] for the combined map. */
+data class NodePower(val single: Double, val offence: Double, val defence: Double)
+
+/** A line of PoB's power report. */
+data class PowerReportEntry(
+    val id: Int,
+    val name: String,
+    val type: String,
+    val power: Double,
+    val powerStr: String,
+    val pathPowerStr: String,
+    val pathDist: Int,
+    val allocated: Boolean,
+)
+
+/** PoB's node powers (CalcsTab:PowerBuilder) for one statistic, with the maxima used for colours. */
+data class PowerResult(
+    val single: Boolean,
+    val maxSingle: Double,
+    val maxOffence: Double,
+    val maxDefence: Double,
+    /** By node id. */
+    val nodes: Map<Int, NodePower>,
+    val report: List<PowerReportEntry>,
+) {
+    companion object {
+        fun parse(o: JSONObject): PowerResult {
+            val max = o.optJSONObject("max") ?: JSONObject()
+            val nodes = HashMap<Int, NodePower>()
+            o.optJSONArray("nodes")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val n = arr.getJSONObject(i)
+                    nodes[n.getInt("id")] = NodePower(n.optDouble("single", 0.0), n.optDouble("offence", 0.0), n.optDouble("defence", 0.0))
+                }
+            }
+            val report = o.optJSONArray("report")?.let { arr ->
+                (0 until arr.length()).map { i ->
+                    val r = arr.getJSONObject(i)
+                    PowerReportEntry(
+                        r.getInt("id"), r.optString("name"), r.optString("type"), r.optDouble("power", 0.0),
+                        r.optString("powerStr"), r.optString("pathPowerStr"), r.optInt("pathDist"), r.optBoolean("allocated"),
+                    )
+                }
+            }.orEmpty()
+            return PowerResult(
+                o.optBoolean("single"), max.optDouble("singleStat", 0.0), max.optDouble("offence", 0.0), max.optDouble("defence", 0.0),
+                nodes, report,
+            )
+        }
+    }
+}

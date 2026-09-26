@@ -228,6 +228,8 @@ function api.state()
 		level = build.characterLevel,
 		levelAuto = build.characterLevelAutoMode and true or false,
 		mainSkillLabel = build.controls.mainSkillLabel and build.controls.mainSkillLabel.label or nil,
+		undo = api.undoState(),
+		overlay = api.treeOverlay(),
 	}
 end
 
