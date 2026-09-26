@@ -9,3 +9,8 @@ build/
 .cxx
 .kotlin/
 /dist
+__pycache__/
+*.pyc
+# Linker by-products of the desktop LuaJIT build (tools/build_luajit.py --host)
+/native/host/**/*.lib
+/native/host/**/*.exp

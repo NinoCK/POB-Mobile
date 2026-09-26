@@ -141,6 +141,7 @@ private fun NodeDetails(vm: TreeViewModel, idx: Int, modifier: Modifier, statsMa
             for (line in node.flavourText) {
                 Text(line, color = PoeColors.Unique, fontStyle = FontStyle.Italic, fontSize = 13.sp, textAlign = TextAlign.Start, modifier = Modifier.padding(top = 4.dp))
             }
+            if (!node.type.isStart) NodeCompare(vm, node.id)
         }
         if (!actionsFirst) {
             Spacer(Modifier.height(10.dp))
@@ -283,4 +284,23 @@ private fun typeLine(vm: TreeViewModel, idx: Int): String {
     }
     if (node.isFreeAllocate) parts += "Free"
     return parts.joinToString(" · ")
+}
+
+/** Stat changes from allocating / removing the node, computed by Path of Building. */
+@Composable
+private fun NodeCompare(vm: TreeViewModel, nodeId: Int) {
+    val calc = vm.calc
+    if (calc.status != io.room.poe2tree.engine.EngineStatus.Ready) return
+    val result = calc.compare?.takeIf { it.nodeId == nodeId }
+    Column(Modifier.padding(top = 8.dp)) {
+        HorizontalDivider(color = PoeColors.Outline, modifier = Modifier.padding(bottom = 4.dp))
+        if (result == null) {
+            Text("Calculating stat changes…", color = PoeColors.TextDim, fontSize = 12.sp)
+        } else {
+            for (line in result.lines) {
+                val header = PobText.strip(line).endsWith(":")
+                PobLabel(line, fontSize = if (header) 13.sp else 14.sp, fontWeight = if (header) FontWeight.SemiBold else null)
+            }
+        }
+    }
 }

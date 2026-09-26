@@ -88,7 +88,10 @@ data class SavedBuild(
     }
 }
 
-/** Stores each build as a JSON file in the app's private storage. */
+/**
+ * Stores each build as a JSON file in the app's private storage: the passive tree and point settings,
+ * plus the build's Path of Building XML (items, skills, configuration) in a separate file.
+ */
 class BuildStore(baseDir: File) {
     private val dir = File(baseDir, "builds").apply { mkdirs() }
     private val stateFile = File(baseDir, "state.json")
@@ -101,18 +104,25 @@ class BuildStore(baseDir: File) {
     fun load(id: String): SavedBuild? = fileFor(id).takeIf { it.exists() }
         ?.let { runCatching { SavedBuild.fromJson(JSONObject(it.readText())) }.getOrNull() }
 
-    fun save(build: SavedBuild) {
-        val tmp = File(dir, "${build.id}.tmp")
-        tmp.writeText(build.toJson().toString())
-        val target = fileFor(build.id)
+    fun save(build: SavedBuild) = writeAtomic(fileFor(build.id), build.toJson().toString())
+
+    fun delete(id: String) {
+        fileFor(id).delete()
+        xmlFor(id).delete()
+    }
+
+    /** The build's Path of Building XML, or null if it has none (a tree-only build). */
+    fun loadXml(id: String): String? = xmlFor(id).takeIf { it.exists() }?.let { runCatching { it.readText() }.getOrNull() }
+
+    fun saveXml(id: String, xml: String) = writeAtomic(xmlFor(id), xml)
+
+    private fun writeAtomic(target: File, text: String) {
+        val tmp = File(target.parentFile, target.name + ".tmp")
+        tmp.writeText(text)
         if (!tmp.renameTo(target)) {
             target.delete()
             tmp.renameTo(target)
         }
-    }
-
-    fun delete(id: String) {
-        fileFor(id).delete()
     }
 
     var lastBuildId: String?
@@ -122,6 +132,7 @@ class BuildStore(baseDir: File) {
         }
 
     private fun fileFor(id: String) = File(dir, "$id.json")
+    private fun xmlFor(id: String) = File(dir, "$id.pob.xml")
 
     companion object {
         fun newId(): String = UUID.randomUUID().toString()

@@ -14,6 +14,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.room.poe2tree.engine.AssetFiles
+import io.room.poe2tree.engine.CalcSession
+import io.room.poe2tree.engine.PobEngine
 import io.room.poe2tree.io.BuildStore
 import io.room.poe2tree.io.PobCode
 import io.room.poe2tree.io.PointSettings
@@ -29,6 +32,7 @@ import io.room.poe2tree.ui.TreeRenderer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.hypot
 import kotlin.math.max
@@ -39,6 +43,9 @@ sealed interface LoadState {
     data class Failed(val message: String) : LoadState
     data object Ready : LoadState
 }
+
+/** The app's screens (Path of Building's tabs). */
+enum class Screen(val title: String) { Tree("Tree"), Stats("Stats"), Skills("Skills"), Items("Items"), Calcs("Calcs"), Config("Config") }
 
 private class Loaded(val tree: PassiveTree, val spec: PassiveSpec, val lastBuild: SavedBuild?, val sprites: SpriteCache)
 
@@ -63,6 +70,28 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
         private set
     private lateinit var sprites: SpriteCache
     private val store = BuildStore(app.filesDir)
+
+    /** Path of Building's calculations for the open build. */
+    val calc = CalcSession(
+        PobEngine(AssetFiles(app.assets), File(app.filesDir, "pob-user")) { line ->
+            if (!line.startsWith("missing node") && !line.endsWith("not found...")) Log.i("PoBLua", line)
+        },
+        viewModelScope,
+        object : CalcSession.Listener {
+            override fun onBuildXml(buildId: String, xml: String) {
+                viewModelScope.launch(Dispatchers.IO) { store.saveXml(buildId, xml) }
+            }
+
+            override fun onError(message: String) {
+                this@TreeViewModel.message = message
+            }
+        },
+    )
+
+    var screen by mutableStateOf(Screen.Tree)
+
+    /** Incremented on every change of the allocated tree (pushed to the engine). */
+    private var treeSeq = 0
 
     /** Incremented on every change of the allocation state. */
     var revision by mutableIntStateOf(0)
@@ -120,6 +149,7 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
     private val spriteRedrawPosted = AtomicBoolean(false)
 
     init {
+        calc.start()
         viewModelScope.launch {
             try {
                 val loaded = withContext(Dispatchers.Default) {
@@ -168,6 +198,7 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         if (::sprites.isInitialized) sprites.shutdown()
+        calc.close()
     }
 
     // =======================================================================================
@@ -330,7 +361,8 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
      * the selected node. Null means the default shortest path is used.
      */
     private var route: IntArray? = null
-    private var routeRevision by mutableIntStateOf(0)
+    var routeRevision by mutableIntStateOf(0)
+        private set
 
     /** True when the planned path of the selected node was chosen by the user (not the shortest). */
     var hasCustomRoute by mutableStateOf(false)
@@ -550,9 +582,42 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
             redoStack.clear()
             updateUndoFlags()
             save()
+            syncTree(after)
         }
         revision++
         refreshSearch()
+    }
+
+    /** Sends the allocated tree to the calculation engine. */
+    private fun syncTree(snapshot: PassiveSpec.Snapshot = spec.snapshot()) {
+        treeSeq++
+        if (buildId.isNotEmpty()) calc.pushTree(buildId, snapshot, treeSeq)
+    }
+
+    /**
+     * Requests the stat changes of allocating or removing the selected node, along the path the
+     * app would allocate (called when the selection, the route or the tree changes).
+     */
+    fun refreshCompare() {
+        val sel = selected
+        if (sel < 0 || !::spec.isInitialized) {
+            calc.requestCompare(null, null, 0, treeSeq)
+            return
+        }
+        val node = tree.nodes[sel]
+        if (node.type.isStart) {
+            calc.requestCompare(null, null, 0, treeSeq)
+            return
+        }
+        val path = if (spec.alloc[sel]) null else plannedPath(sel)?.map { tree.nodes[it].id }?.toIntArray()
+        calc.requestCompare(node.id, path, spec.currentAllocMode, treeSeq)
+    }
+
+    /** Selects a passive on the tree screen (from a calculation breakdown). */
+    fun showNodeById(nodeId: Int) {
+        val node = tree.node(nodeId) ?: return
+        screen = Screen.Tree
+        showNode(node.idx)
     }
 
     fun undo() {
@@ -575,6 +640,7 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
         revision++
         refreshSearch()
         save()
+        syncTree()
     }
 
     private fun updateUndoFlags() {
@@ -619,6 +685,8 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
         revision++
         refreshSearch()
         if (cameraInitialised) focusOnStart()
+        treeSeq++
+        calc.open(build.id, build.name, store.loadXml(build.id), spec.snapshot(), build.settings.level, treeSeq)
     }
 
     fun createBuild(name: String, classId: Int) {
@@ -651,6 +719,7 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
         val source = if (id == buildId) currentBuild() else store.load(id) ?: return
         val copy = source.copy(id = BuildStore.newId(), name = source.name + " (copy)", updatedAt = System.currentTimeMillis())
         store.save(copy)
+        store.loadXml(id)?.let { store.saveXml(copy.id, it) }
         applyBuild(copy)
     }
 
@@ -664,9 +733,11 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun updateSettings(newSettings: PointSettings) {
+        val levelChanged = newSettings.level != settings.level
         settings = newSettings
         save()
         revision++
+        if (levelChanged) calc.setLevel(newSettings.level)
     }
 
     fun buildSummary(build: SavedBuild): String {
@@ -683,10 +754,15 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
     // Import / export
     // =======================================================================================
 
-    /** Imports a PoB2 build code as a new build. Returns an error message, or null on success. */
+    /**
+     * Imports a PoB2 build code as a new build: the passive tree in the app, and the whole build
+     * (items, skills, configuration) in the calculation engine. Returns an error message, or null.
+     */
     fun importCode(code: String): String? {
+        val xml: String
         val result = try {
-            PobCode.import(code, tree)
+            xml = PobCode.decodeXml(code)
+            PobCode.importXml(xml, tree)
         } catch (e: PobCode.ImportException) {
             return e.message
         } catch (e: Exception) {
@@ -702,6 +778,7 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
             settings = base.copy(level = (result.level ?: base.level).coerceIn(1, 100)),
         )
         store.save(build)
+        store.saveXml(build.id, xml)
         applyBuild(build)
         // Store the normalized state (unknown nodes dropped)
         save()
@@ -712,7 +789,14 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
         return null
     }
 
-    fun exportCode(): String = PobCode.export(spec, buildName, settings.level)
+    /**
+     * The build as a PoB2 code: the whole build from the calculation engine, or only the passive tree
+     * while the engine is not available.
+     */
+    suspend fun exportCode(): String {
+        val xml = calc.exportXml(treeSeq)
+        return if (xml != null) PobCode.encodeXml(xml) else PobCode.export(spec, buildName, settings.level)
+    }
 
     // =======================================================================================
     // Search

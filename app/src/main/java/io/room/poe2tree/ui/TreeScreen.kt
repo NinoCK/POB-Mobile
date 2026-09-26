@@ -67,7 +67,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.room.poe2tree.LoadState
+import io.room.poe2tree.Screen
 import io.room.poe2tree.TreeViewModel
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 
 private enum class DialogKind { None, Import, Export, Settings, Summary, Builds, NewBuild, Rename, Reset, About }
 
@@ -114,13 +117,17 @@ private fun TreeScreen(vm: TreeViewModel) {
         if (vm.message == m) vm.message = null
     }
 
-    BackHandler(enabled = vm.selected >= 0 || searching) {
-        if (vm.selected >= 0) vm.clearSelection()
+    BackHandler(enabled = vm.selected >= 0 || searching || vm.screen != Screen.Tree) {
+        if (vm.screen != Screen.Tree) vm.screen = Screen.Tree
+        else if (vm.selected >= 0) vm.clearSelection()
         else {
             searching = false
             vm.updateSearch("")
         }
     }
+
+    // Stat changes of the selected node, recalculated when the selection, route or tree changes
+    LaunchedEffect(vm.selected, vm.revision, vm.routeRevision, vm.calc.status) { vm.refreshCompare() }
 
     val actions = ScreenActions(
         onBuilds = { dialog = DialogKind.Builds },
@@ -157,6 +164,7 @@ private fun TreeScreen(vm: TreeViewModel) {
         DialogKind.About -> ConfirmDialog(
             "About",
             "PoE2 Passive Tree ${vm.tree.treeVersion.replace('_', '.')}\n\nPassive tree data and allocation logic are ported from Path of Building Community (PoE2), MIT licensed. " +
+                "Damage and stat calculations are made by Path of Building's own calculation engine, running on the phone. " +
                 "Game art © Grinding Gear Games. This app is not affiliated with Grinding Gear Games.",
             null, onConfirm = {}, onDismiss = { dialog = DialogKind.None },
         )
@@ -174,11 +182,66 @@ private fun PortraitLayout(vm: TreeViewModel, zoom: ZoomController, snackbar: Sn
             .statusBarsPadding()
     ) {
         TopBar(vm, actions)
-        ControlsRow(vm)
-        PointsRow(vm, onClick = actions.onPoints)
-        if (searching) SearchBar(vm)
-        TreeArea(vm, zoom, snackbar, bottomPanel = true, overlayInsets = WindowInsets(0), modifier = Modifier.weight(1f).fillMaxWidth())
+        ScreenTabs(vm)
+        if (vm.screen == Screen.Tree) {
+            ControlsRow(vm)
+            PointsRow(vm, onClick = actions.onPoints)
+            KeyStatsBar(vm, onClick = { vm.screen = Screen.Stats })
+            HorizontalDivider(color = PoeColors.Outline)
+            if (searching) SearchBar(vm)
+            TreeArea(vm, zoom, snackbar, bottomPanel = true, overlayInsets = WindowInsets(0), modifier = Modifier.weight(1f).fillMaxWidth())
+        } else {
+            Box(Modifier.weight(1f).fillMaxWidth().background(MaterialTheme.colorScheme.background).navigationBarsPadding()) {
+                ScreenContent(vm, Modifier.fillMaxSize())
+                SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+            }
+        }
     }
+}
+
+/** Content of the screens other than the tree. */
+@Composable
+private fun ScreenContent(vm: TreeViewModel, modifier: Modifier) {
+    when (vm.screen) {
+        Screen.Tree -> {}
+        Screen.Stats -> StatsScreen(vm, modifier)
+        Screen.Skills -> SkillsScreen(vm, modifier)
+        Screen.Items -> ItemsScreen(vm, modifier)
+        Screen.Calcs -> CalcsScreen(vm, modifier)
+        Screen.Config -> ConfigScreen(vm, modifier)
+    }
+}
+
+/** Tree / Stats / Skills / Items / Calcs / Config, like Path of Building's tabs. */
+@Composable
+private fun ScreenTabs(vm: TreeViewModel) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 4.dp),
+    ) {
+        for (s in Screen.entries) {
+            val active = vm.screen == s
+            Column(
+                Modifier
+                    .clickable { vm.screen = s }
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    s.title,
+                    fontSize = 14.sp,
+                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                    color = if (active) PoeColors.GoldBright else PoeColors.TextDim,
+                )
+                Spacer(Modifier.height(3.dp))
+                Box(Modifier.width(28.dp).height(2.dp).background(if (active) PoeColors.Gold else androidx.compose.ui.graphics.Color.Transparent))
+            }
+        }
+    }
+    HorizontalDivider(color = PoeColors.Outline)
 }
 
 /** Landscape: controls and node details in a panel on the left, tree on the right. */
@@ -201,18 +264,42 @@ private fun LandscapeLayout(
                 .fillMaxHeight()
         ) {
             TopBar(vm, actions, showLevel = true)
-            SidebarControls(vm)
-            PointsFlow(vm, onClick = actions.onPoints)
-            if (searching) SearchBar(vm)
-            HorizontalDivider(color = PoeColors.Outline)
-            NodeSidebarDetails(vm, Modifier.weight(1f).fillMaxWidth())
+            ScreenTabs(vm)
+            when (vm.screen) {
+                Screen.Tree -> {
+                    SidebarControls(vm)
+                    PointsFlow(vm, onClick = actions.onPoints)
+                    KeyStatsBar(vm, onClick = { vm.screen = Screen.Stats })
+                    if (searching) SearchBar(vm)
+                    HorizontalDivider(color = PoeColors.Outline)
+                    NodeSidebarDetails(vm, Modifier.weight(1f).fillMaxWidth())
+                }
+                // The stats are the main content: the side shows the skill selection
+                Screen.Stats -> StatsScreen(vm, Modifier.weight(1f).fillMaxWidth(), part = StatsPart.Selection)
+                // PoB's sidebar next to the other screens
+                else -> SidebarStats(vm, Modifier.weight(1f).fillMaxWidth())
+            }
         }
         VerticalDivider(color = PoeColors.Outline)
-        TreeArea(
-            vm, zoom, snackbar, bottomPanel = false,
-            overlayInsets = bars.only(WindowInsetsSides.End + WindowInsetsSides.Vertical),
-            modifier = Modifier.weight(1f).fillMaxHeight(),
-        )
+        if (vm.screen == Screen.Tree) {
+            TreeArea(
+                vm, zoom, snackbar, bottomPanel = false,
+                overlayInsets = bars.only(WindowInsetsSides.End + WindowInsetsSides.Vertical),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+            )
+        } else {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .background(MaterialTheme.colorScheme.background)
+                    .windowInsetsPadding(bars.only(WindowInsetsSides.End + WindowInsetsSides.Vertical)),
+            ) {
+                if (vm.screen == Screen.Stats) StatsScreen(vm, Modifier.fillMaxSize(), part = StatsPart.List)
+                else ScreenContent(vm, Modifier.fillMaxSize())
+                SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+            }
+        }
     }
 }
 

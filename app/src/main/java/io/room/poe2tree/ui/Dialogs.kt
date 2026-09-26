@@ -31,6 +31,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,7 +60,7 @@ fun ImportDialog(vm: TreeViewModel, onDismiss: () -> Unit) {
         title = { Text("Import build code") },
         text = {
             Column {
-                Text("Paste a Path of Building 2 build code. It is imported as a new build (only the passive tree is used).", fontSize = 13.sp, color = PoeColors.TextDim)
+                Text("Paste a Path of Building 2 build code. It is imported as a new build, with its passive tree, items, skills and configuration.", fontSize = 13.sp, color = PoeColors.TextDim)
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = code,
@@ -89,13 +90,19 @@ fun ImportDialog(vm: TreeViewModel, onDismiss: () -> Unit) {
 @Composable
 fun ExportDialog(vm: TreeViewModel, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val code = remember { vm.exportCode() }
+    var exported by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) { exported = vm.exportCode() }
+    val code = exported ?: ""
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Export build code") },
         text = {
             Column {
-                Text("Path of Building 2 code containing this passive tree. Paste it into PoB's Import/Export tab.", fontSize = 13.sp, color = PoeColors.TextDim)
+                Text(
+                    if (vm.calc.ready) "Path of Building 2 code of the whole build (tree, items, skills, configuration). Paste it into PoB's Import/Export tab."
+                    else "Path of Building 2 code containing this passive tree. Paste it into PoB's Import/Export tab.",
+                    fontSize = 13.sp, color = PoeColors.TextDim,
+                )
                 Spacer(Modifier.height(8.dp))
                 Text(
                     code,
@@ -107,7 +114,7 @@ fun ExportDialog(vm: TreeViewModel, onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(onClick = {
+            TextButton(enabled = exported != null, onClick = {
                 val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 cm.setPrimaryClip(ClipData.newPlainText("PoB build code", code))
                 vm.message = "Build code copied."
@@ -115,7 +122,7 @@ fun ExportDialog(vm: TreeViewModel, onDismiss: () -> Unit) {
             }) { Text("Copy") }
         },
         dismissButton = {
-            TextButton(onClick = {
+            TextButton(enabled = exported != null, onClick = {
                 val send = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
                     putExtra(Intent.EXTRA_TEXT, code)

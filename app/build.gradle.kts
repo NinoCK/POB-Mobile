@@ -14,6 +14,7 @@ kotlin {
 android {
     namespace = "io.room.poe2tree"
     compileSdk = 37
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "io.room.poe2tree"
@@ -21,6 +22,18 @@ android {
         targetSdk = 36
         versionCode = 2
         versionName = "1.0.1"
+
+        ndk {
+            // LuaJIT runs Path of Building's calculations; x86_64 is for the emulator
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("../native/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     buildTypes {
