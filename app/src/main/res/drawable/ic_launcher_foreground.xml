@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A small passive-tree motif: a ring of nodes connected to a central notable. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:strokeColor="#C8A45A"
+        android:strokeWidth="2.5"
+        android:fillColor="#00000000"
+        android:pathData="M54,32 A22,22 0 1,1 53.99,32 Z" />
+    <path
+        android:strokeColor="#8A7442"
+        android:strokeWidth="2"
+        android:pathData="M54,54 L54,32 M54,54 L73,65 M54,54 L35,65" />
+    <path
+        android:fillColor="#E8C77E"
+        android:pathData="M54,46 L62,54 L54,62 L46,54 Z" />
+    <path
+        android:fillColor="#C8A45A"
+        android:pathData="M54,28 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0" />
+    <path
+        android:fillColor="#C8A45A"
+        android:pathData="M76,67 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0" />
+    <path
+        android:fillColor="#C8A45A"
+        android:pathData="M32,67 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0" />
+</vector>
