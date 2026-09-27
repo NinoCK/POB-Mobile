@@ -1,8 +1,6 @@
 package io.room.poe2tree
 
 import android.app.Application
-import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -19,15 +17,12 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.room.poe2tree.engine.AssetFiles
 import io.room.poe2tree.engine.CalcSession
-import io.room.poe2tree.engine.EngineException
 import io.room.poe2tree.engine.EngineStatus
 import io.room.poe2tree.engine.PowerResult
 import io.room.poe2tree.engine.PowerStat
 import io.room.poe2tree.engine.PobEngine
 import io.room.poe2tree.io.BuildStore
 import io.room.poe2tree.io.PobCode
-import io.room.poe2tree.io.PoeAccount
-import io.room.poe2tree.io.PoeCharacter
 import io.room.poe2tree.io.PointSettings
 import io.room.poe2tree.io.SavedBuild
 import io.room.poe2tree.tree.NodeType
@@ -100,20 +95,6 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
             }
         },
     )
-
-    /** The Path of Exile account and character list for character import. */
-    val characterImport = CharacterImport(
-        PoeAccount(
-            File(app.noBackupFilesDir, "poe-account.json"),
-            "PoE2PassiveTree/${runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }.getOrNull() ?: "0"} (Android)",
-        ),
-        viewModelScope,
-    ) { url ->
-        app.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-    }
-    /** Progress of a character import ("Downloading…", "Importing…"), null when none runs. */
-    var characterImportProgress by mutableStateOf<String?>(null)
-        private set
 
     var screen by mutableStateOf(Screen.Tree)
 
@@ -958,90 +939,6 @@ class TreeViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun exportCode(): String {
         val xml = calc.exportXml(treeSeq)
         return if (xml != null) PobCode.encodeXml(xml) else PobCode.export(spec, buildName, settings.level)
-    }
-
-    /** The class or ascendancy name of a character from the Path of Exile API (which may give internal ids). */
-    fun characterClassName(raw: String): String =
-        tree.ascendancyByInternalId[raw]?.second?.name ?: raw
-
-    private fun classIdFor(raw: String): Int =
-        tree.classByName(raw)?.integerId
-            ?: tree.classes.firstOrNull { c -> c.ascendancies.any { it.name.equals(raw, ignoreCase = true) } }?.integerId
-            ?: tree.ascendancyByInternalId[raw]?.first?.integerId
-            ?: spec.classId
-
-    /**
-     * Imports a character of the signed-in account with PoB's character import: downloads it, then
-     * imports it into a new build named after it or into the open build ([options]). Calls [onDone]
-     * once imported; errors are shown by the import dialog ([CharacterImport.error]).
-     */
-    fun importCharacter(character: PoeCharacter, options: CharacterImportOptions, onDone: () -> Unit) {
-        if (characterImportProgress != null) return
-        viewModelScope.launch {
-            try {
-                characterImportProgress = "Downloading ${character.name}…"
-                val data = characterImport.download(character.name) ?: return@launch
-                characterImportProgress = "Importing ${character.name}…"
-                val previous = buildId
-                if (options.newBuild) createBuild(character.name, classIdFor(data.optString("class").ifEmpty { character.className }))
-                val target = buildId
-                val xml = try {
-                    calc.importCharacter(target, data, options.toEngineJson())
-                } catch (e: EngineException) {
-                    characterImport.error = "Import failed: " + (e.message?.substringBefore("stack traceback")?.trim()?.ifEmpty { null } ?: "calculation error")
-                    if (options.newBuild && target == buildId) {
-                        // Back to the build that was open, without the empty new one
-                        openBuild(previous)
-                        store.delete(target)
-                    }
-                    return@launch
-                }
-                if (target != buildId) return@launch
-                val warnings = applyImportedBuild(xml, undoable = !options.newBuild)
-                message = (listOf("${character.name} imported.") + warnings).joinToString("\n")
-                onDone()
-            } finally {
-                characterImportProgress = null
-            }
-        }
-    }
-
-    /**
-     * After an import into the open build in the engine: the app takes the engine's tree and level
-     * from the build's XML (an undoable tree change when [undoable]). Returns warnings.
-     */
-    private fun applyImportedBuild(xml: String, undoable: Boolean): List<String> {
-        val result = PobCode.importXml(xml, tree)
-        // The imported jewels first, so passives allocated through them stay allocated
-        calc.state?.overlay?.let { overlay ->
-            val j = parseTreeJewels(overlay, tree)
-            jewelsSource = overlay.toString()
-            jewels = j
-            spec.setJewels(j, known = true)
-        }
-        val before = spec.snapshot()
-        spec.restore(result.snapshot)
-        val after = spec.snapshot()
-        result.level?.let { settings = settings.copy(level = it.coerceIn(1, 100)) }
-        if (undoable && after != before) {
-            undoStack.addLast(before)
-            if (undoStack.size > MAX_UNDO) undoStack.removeFirst()
-            redoStack.clear()
-            updateUndoFlags()
-        }
-        setRoute(null)
-        selected = -1
-        save()
-        syncTree(after)
-        revision++
-        refreshSearch()
-        if (cameraInitialised) focusOnStart()
-        val warnings = ArrayList<String>()
-        val dropped = result.snapshot.nodes.keys - after.nodes.keys
-        if (dropped.isNotEmpty()) warnings += "${dropped.size} passive(s) could not be allocated in this tree version."
-        val c = spec.counts()
-        if (c.normal > settings.normalMax) warnings += "This build uses more passive points (${c.normal}) than the current limit (${settings.normalMax})."
-        return warnings
     }
 
     // =======================================================================================

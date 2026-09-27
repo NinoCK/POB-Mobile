@@ -61,6 +61,8 @@ fun ImportDialog(vm: TreeViewModel, onDismiss: () -> Unit) {
         text = {
             Column {
                 Text("Paste a Path of Building 2 build code. It is imported as a new build, with its passive tree, items, skills and configuration.", fontSize = 13.sp, color = PoeColors.TextDim)
+                Spacer(Modifier.height(4.dp))
+                Text("To bring in a character from the game, import it in Path of Building on PC (Import/Export › Character Import) and copy its build code.", fontSize = 12.sp, color = PoeColors.TextDim)
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = code,

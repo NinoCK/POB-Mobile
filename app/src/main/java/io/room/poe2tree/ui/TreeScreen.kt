@@ -72,7 +72,7 @@ import io.room.poe2tree.TreeViewModel
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 
-private enum class DialogKind { None, Import, CharacterImport, Export, Settings, Summary, Builds, NewBuild, Rename, Reset, About, HeatMap, PowerReport }
+private enum class DialogKind { None, Import, Export, Settings, Summary, Builds, NewBuild, Rename, Reset, About, HeatMap, PowerReport }
 
 @Composable
 fun AppRoot(vm: TreeViewModel) {
@@ -153,7 +153,6 @@ private fun TreeScreen(vm: TreeViewModel) {
     ClassChangeDialog(vm)
     when (dialog) {
         DialogKind.Import -> ImportDialog(vm) { dialog = DialogKind.None }
-        DialogKind.CharacterImport -> CharacterImportDialog(vm) { dialog = DialogKind.None }
         DialogKind.Export -> ExportDialog(vm) { dialog = DialogKind.None }
         DialogKind.Settings -> SettingsDialog(vm) { dialog = DialogKind.None }
         DialogKind.Summary -> SummaryDialog(vm) { dialog = DialogKind.None }
@@ -409,7 +408,6 @@ private fun TopBar(vm: TreeViewModel, actions: ScreenActions, showLevel: Boolean
                 MenuItem("New build…") { pick(DialogKind.NewBuild) }
                 MenuItem("Rename build…") { pick(DialogKind.Rename) }
                 HorizontalDivider()
-                MenuItem("Import character…") { pick(DialogKind.CharacterImport) }
                 MenuItem("Import PoB code…") { pick(DialogKind.Import) }
                 MenuItem("Export PoB code…") { pick(DialogKind.Export) }
                 HorizontalDivider()

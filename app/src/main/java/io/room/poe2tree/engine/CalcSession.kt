@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import org.json.JSONArray
 import org.json.JSONObject
@@ -75,8 +74,6 @@ class CalcSession(
     private var openBuildId: String? = null
     private var pendingOpen: OpenRequest? = null
     private val appliedTreeSeq = MutableStateFlow(-1)
-    /** The build loaded and calculated in the engine. */
-    private val loadedBuild = MutableStateFlow<String?>(null)
     private val treePushes = MutableStateFlow<TreePush?>(null)
     private var compareJob: Job? = null
     private var saveJob: Job? = null
@@ -122,7 +119,6 @@ class CalcSession(
         compareJob?.cancel()
         powerJob?.cancel()
         openBuildId = null
-        loadedBuild.value = null
         state = null
         compare = null
         power = null
@@ -167,7 +163,6 @@ class CalcSession(
         if (result.droppedNodes.isNotEmpty()) Log.w(TAG, "PoB did not accept nodes ${result.droppedNodes}")
         applyState(result)
         appliedTreeSeq.value = maxOf(appliedTreeSeq.value, request.treeSeq)
-        loadedBuild.value = request.buildId
         if (result.changed) scheduleSave(TREE_SAVE_DELAY_MS)
     }
 
@@ -395,33 +390,6 @@ class CalcSession(
         ScreenJson.itemTooltip(api.callObject("itemTooltip", JSONObject().put("id", id).apply { if (slot != null) put("slot", slot) }))
     }
 
-    /**
-     * Imports a character downloaded from the Path of Exile API into the build [buildId] with PoB's
-     * character import, once that build is open in the engine. Returns the build's new XML (also
-     * saved); throws [EngineException] with PoB's message on failure.
-     */
-    suspend fun importCharacter(buildId: String, character: JSONObject, options: JSONObject): String {
-        if (status is EngineStatus.Failed) throw EngineException("The calculation engine is not running.")
-        withTimeoutOrNull(OPEN_TIMEOUT_MS) { loadedBuild.first { it == buildId } }
-            ?: throw EngineException("The build could not be opened in the calculation engine.")
-        busy++
-        try {
-            val result = try {
-                engine.call { api -> api.callObject("importCharacter", JSONObject(options.toString()).put("character", character)) }
-            } catch (e: LuaException) {
-                Log.e(TAG, "lua error", e)
-                throw EngineException("Calculation error: ${e.message?.lineSequence()?.firstOrNull()}")
-            }
-            if (buildId != openBuildId) throw EngineException("Another build was opened during the import.")
-            applyState(EngineJson.state(result.getJSONObject("state")))
-            val xml = result.getString("xml")
-            listener.onBuildXml(buildId, xml)
-            return xml
-        } finally {
-            busy--
-        }
-    }
-
     /** The open build as PoB XML, with the current tree. Null if the engine is not ready. */
     suspend fun exportXml(treeSeq: Int): String? {
         if (!ready) return null
@@ -502,8 +470,6 @@ class CalcSession(
     companion object {
         private const val TAG = "PoE2Calc"
         private const val TREE_SAVE_DELAY_MS = 1500L
-        /** Longest wait for a build to open (the engine may still be starting). */
-        private const val OPEN_TIMEOUT_MS = 120_000L
         /** Engine time per heat map step: other calls wait at most about this long. */
         private const val POWER_STEP_MS = 120
     }
