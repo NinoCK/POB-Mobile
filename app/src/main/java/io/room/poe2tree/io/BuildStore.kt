@@ -106,6 +106,8 @@ class BuildStore(baseDir: File) {
 
     fun save(build: SavedBuild) = writeAtomic(fileFor(build.id), build.toJson().toString())
 
+    fun exists(id: String) = fileFor(id).exists()
+
     fun delete(id: String) {
         fileFor(id).delete()
         xmlFor(id).delete()

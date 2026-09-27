@@ -20,8 +20,8 @@ android {
         applicationId = "io.room.poe2tree"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "2.5.0"
+        versionCode = 10
+        versionName = "2.6.0"
 
         ndk {
             // LuaJIT runs Path of Building's calculations; x86_64 is for the emulator
