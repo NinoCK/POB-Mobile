@@ -84,6 +84,8 @@ so the numbers are PoB's. The screens follow PoB's tabs:
   sets, and custom modifiers.
 
 Build codes import the whole build (tree, items, skills, configuration) and export the whole build.
+A character from the game comes in the same way: import it in Path of Building on a PC (Import/Export
+tab, Character Import) and paste its build code; the app itself has no network access.
 A build's PoB data is saved next to it on the device. The tree is edited in the app, the rest in
 the engine. Undo / redo works on the current screen, like Ctrl+Z / Ctrl+Y in PoB's tabs: the tree's
 history on the Tree screen, PoB's own history of the Skills, Items, Calcs and Config tabs on
@@ -91,28 +93,6 @@ theirs (100 changes each).
 
 PoE2 has no cluster jewels (the tree has no expansion sockets and PoB-PoE2 has none), so there is
 nothing to show for them.
-
-### Character import
-
-⋮ > "Import character…" imports a character of your Path of Exile account, like the Character
-Import section of PoB's Import/Export tab:
-
-- Sign in on pathofexile.com in the browser (OAuth, as PoB does it: PoB's public client `pob`, with
-  the code sent back to a server of the app on `http://localhost:49082`–`49084`; the app only asks
-  for the `account:characters` scope). "Return to the app" on the page shown afterwards opens the
-  app again. The tokens are kept in the app's no-backup storage and renewed with the refresh token;
-  "Sign out" deletes them.
-- Choose the league and the character (PoE2 characters, from `api.pathofexile.com/character/poe2`).
-- Import into a new build named after the character, or into the open build; the passive tree and
-  jewels and / or the items and skills, with PoB's options (delete jewels, skills, equipment; ignore
-  weapon swap).
-
-The import itself is PoB's (`ImportTab:ImportPassiveTreeAndJewels` / `ImportItemsAndSkills`,
-called by `engine/api/Import.lua`): class and ascendancy, passives, weapon-set passives,
-attribute choices, quest rewards in the configuration, character level, jewels, equipment, runes,
-flasks and charms, skill gems and supports. The app then takes the tree and level from the build.
-An import into the open build can be undone (the tree on the Tree screen, the items and skills on
-theirs).
 
 ## Building
 
@@ -143,9 +123,8 @@ Unit tests (the real tree data and the real engine; Windows, see below):
 | `native/host/win-x64` | Desktop build of the bridge for the unit tests, and `luajit.exe` |
 | `app/src/main/assets/pob` | Path of Building's Lua program and data (from `tools/build_pob_assets.py`) |
 | `app/src/main/assets/engine/Host.lua` | Runs PoB headless (like PoB's `HeadlessWrapper.lua`) |
-| `app/src/main/assets/engine/Api.lua`, `api/*.lua` | The app's API over PoB's objects, returning JSON (`Craft.lua` drives PoB's item editor controls and popups, `CraftMods.lua` is the crafting model: modifier pools by source, tiers, rolls, conversion of pasted items; `Power.lua` runs PoB's node power builder in steps; `Import.lua` runs PoB's character import) |
+| `app/src/main/assets/engine/Api.lua`, `api/*.lua` | The app's API over PoB's objects, returning JSON (`Craft.lua` drives PoB's item editor controls and popups, `CraftMods.lua` is the crafting model: modifier pools by source, tiers, rolls, conversion of pasted items; `Power.lua` runs PoB's node power builder in steps) |
 | `engine/*.kt` | JNI bindings, the engine thread, the open build's session and data models |
-| `io/PoeAccount.kt` | pathofexile.com sign-in (OAuth with PKCE, local redirect server) and the character endpoints of the Path of Exile API |
 
 LuaJIT runs as an interpreter (`jit.off()` in `Host.lua`): PoB's code is branchy and short-running,
 and trace compilation made opening a build several times slower on the emulator.
