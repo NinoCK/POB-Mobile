@@ -197,6 +197,8 @@ private fun GemRow(gem: GemInfo, onClick: () -> Unit) {
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        GemIcon(gem.name, 28.dp)
+        Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             PobLabel(
                 gem.colour + gem.name,
@@ -230,7 +232,13 @@ private fun GemDialog(vm: TreeViewModel, group: Int, gemIndex: Int, gem: GemInfo
     var quality by remember(gem.quality) { mutableStateOf(gem.quality.toString()) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { PobLabel(gem.colour + gem.name, fontWeight = FontWeight.SemiBold, fontSize = 18.sp) },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                GemIcon(gem.name, 40.dp)
+                Spacer(Modifier.width(10.dp))
+                PobLabel(gem.colour + gem.name, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+            }
+        },
         text = {
             Column(Modifier.heightIn(max = 540.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (!gem.locked) {
@@ -291,9 +299,13 @@ private fun GemSearchDialog(vm: TreeViewModel, onDismiss: () -> Unit, onPick: (G
                 }
                 LazyColumn(Modifier.heightIn(max = 380.dp)) {
                     items(results, key = { it.gemId }) { gem ->
-                        Column(Modifier.fillMaxWidth().clickable { onPick(gem) }.padding(vertical = 6.dp)) {
-                            PobLabel(gem.colour + gem.name, fontSize = 15.sp)
-                            gem.tags?.let { Caption(it) }
+                        Row(Modifier.fillMaxWidth().clickable { onPick(gem) }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            GemIcon(gem.name, 32.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                PobLabel(gem.colour + gem.name, fontSize = 15.sp)
+                                gem.tags?.let { Caption(it) }
+                            }
                         }
                     }
                 }

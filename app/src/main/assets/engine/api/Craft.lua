@@ -78,51 +78,60 @@ local function describe(name, c)
 	return d
 end
 
--- The editor's controls, in rows as PoB lays them out
+-- The editor's controls the app shows as PoB's, in rows as PoB lays them out, each with the
+-- section of the app's screen it goes in. The affixes, their sorting, the custom modifiers and the
+-- range sliders are the app's own (api.craftModel in CraftMods.lua).
 local function editorRows()
 	local rows = {
-		{ "addDisplayItem", "editDisplayItem", "removeDisplayItem" },
-		{ "displayItemVersion" }, { "displayItemBaseVariant" }, { "displayItemVariant" },
-		{ "displayItemAltVariant" }, { "displayItemAltVariant2" }, { "displayItemAltVariant3" }, { "displayItemAltVariant4" }, { "displayItemAltVariant5" },
-		{ "displayItemSocketRune", "displayItemSocketRuneEdit", "displayItemSocketJewel", "displayItemSocketJewelEdit" },
-		{ "displayItemAnoint", "displayItemAnoint2", "displayItemAnoint3", "displayItemAnoint4", "displayItemCorrupt" },
-		{ "displayItemQuality", "displayItemQualityEdit" },
-		{ "displayItemCatalyst", "displayItemCatalystQualityEdit" },
+		{ "actions", "addDisplayItem", "editDisplayItem", "removeDisplayItem" },
+		{ "variants", "displayItemVersion" }, { "variants", "displayItemBaseVariant" }, { "variants", "displayItemVariant" },
+		{ "variants", "displayItemAltVariant" }, { "variants", "displayItemAltVariant2" }, { "variants", "displayItemAltVariant3" },
+		{ "variants", "displayItemAltVariant4" }, { "variants", "displayItemAltVariant5" },
+		{ "properties", "displayItemQuality", "displayItemQualityEdit" },
+		{ "properties", "displayItemCatalyst", "displayItemCatalystQualityEdit" },
+		{ "enchant", "displayItemAnoint", "displayItemAnoint2", "displayItemAnoint3", "displayItemAnoint4", "displayItemCorrupt" },
+		{ "sockets", "displayItemSocketRune", "displayItemSocketRuneEdit", "displayItemSocketJewel", "displayItemSocketJewelEdit" },
 	}
 	for i = 1, 6 do
-		rows[#rows + 1] = { "displayItemRuneLabel" .. i, "displayItemRune" .. i }
+		rows[#rows + 1] = { "sockets", "displayItemRuneLabel" .. i, "displayItemRune" .. i }
 	end
-	rows[#rows + 1] = { "craftingSortingLabel", "craftingSorting" }
-	for i = 1, 9 do
-		rows[#rows + 1] = { "displayItemAffixLabel" .. i, "displayItemAffix" .. i }
-		rows[#rows + 1] = { "displayItemAffixRangeLabel" .. i, "displayItemAffixRange" .. i }
-	end
-	rows[#rows + 1] = { "displayItemAddCustom" }
-	local i = 1
-	while itemsTab().controls["displayItemCustomModifierRemove" .. i] do
-		rows[#rows + 1] = { "displayItemCustomModifierLabel" .. i, "displayItemCustomModifier" .. i, "displayItemCustomModifierRemove" .. i }
-		i = i + 1
-	end
-	rows[#rows + 1] = { "displayItemRangeLine", "displayItemRangeSlider" }
-	for j = 1, 20 do
-		rows[#rows + 1] = { "displayItemStackedRangeSlider" .. j, "displayItemStackedRangeLine" .. j }
-	end
+	rows[#rows + 1] = { "modifiers", "displayItemAddCustom" }
 	return rows
 end
+
+-- Labels of PoB's controls that are drawn as icons or short marks on the desktop
+local labelOverrides = {
+	displayItemSocketRune = "^7Rune sockets:",
+	displayItemSocketJewel = "^7Jewel sockets:",
+	displayItemAddCustom = "Add from lists...",
+}
 
 local function describeRows(rows, controls)
 	local out = api.array()
 	for _, row in ipairs(rows) do
 		local r = api.array()
-		for _, name in ipairs(row) do
+		for i = 2, #row do
+			local name = row[i]
 			local c = controls[name]
 			if c and isShown(c) then
-				r[#r + 1] = describe(name, c)
+				local d = describe(name, c)
+				if d and labelOverrides[name] then
+					d.label = labelOverrides[name]
+				end
+				r[#r + 1] = d
 			end
 		end
 		if #r > 0 then
-			out[#out + 1] = r
+			out[#out + 1] = { section = row[1], controls = r }
 		end
+	end
+	return out
+end
+
+local function describePopupRows(rows)
+	local out = api.array()
+	for _, row in ipairs(rows) do
+		out[#out + 1] = { section = "popup", controls = row }
 	end
 	return out
 end
@@ -169,7 +178,8 @@ local function tooltipLines(item)
 	return api.tooltipLines(tt)
 end
 
--- The editor: { item = { lines, editing } | nil, rows, popup = { title, rows } | nil, added }
+-- The editor: { item = { lines, editing } | nil, rows = { { section, controls } }, model (the
+-- app's crafting model, see CraftMods.lua), popup = { title, rows } | nil, added }
 function api.craftState()
 	local tab = itemsTab()
 	local out = { rows = api.array() }
@@ -177,10 +187,16 @@ function api.craftState()
 	if item then
 		out.item = { lines = tooltipLines(item), editing = tab.items[item.id] ~= nil, raw = item:BuildRaw() }
 		out.rows = describeRows(editorRows(), tab.controls)
+		local ok, model = pcall(api.craftModel, item)
+		if ok then
+			out.model = model
+		else
+			ConPrintf("craft model: %s", tostring(model))
+		end
 	end
 	local popup = main.popups[1]
 	if popup then
-		out.popup = { title = popup.title or "", rows = popupRows(popup) }
+		out.popup = { title = popup.title or "", rows = describePopupRows(popupRows(popup)) }
 	end
 	return out
 end
@@ -250,7 +266,7 @@ function api.itemDB(args)
 	for name, item in pairs(db.list) do
 		local text = (name .. " " .. (item.baseName or "") .. " " .. (item.type or "")):lower()
 		if query == "" or text:find(query, 1, true) then
-			found[#found + 1] = { name = name, base = item.baseName, type = item.type, rarity = item.rarity }
+			found[#found + 1] = { name = name, title = item.title, base = item.baseName, type = item.type, rarity = item.rarity }
 		end
 	end
 	table.sort(found, function(a, b)
@@ -317,6 +333,15 @@ function api.craftAction(args)
 		error("unknown control " .. tostring(args.name), 0)
 	end
 	local op, value = args.op, args.value
+	-- PoB's catalyst controls choose every affix again from its dropdown, which only lists the
+	-- base's regular modifiers with one roll: the app's affixes are kept and crafted again
+	local item = itemsTab().displayItem
+	local keepAffixes = args.target ~= "popup" and item and item.crafted
+		and (args.name == "displayItemCatalyst" or args.name == "displayItemCatalystQualityEdit")
+	local saved
+	if keepAffixes then
+		saved = { prefixes = copyTable(item.prefixes), suffixes = copyTable(item.suffixes) }
+	end
 	if op == "select" then
 		local index = tonumber(value)
 		if c._className == "DropDownControl" then
@@ -347,6 +372,16 @@ function api.craftAction(args)
 		c:Click()
 	else
 		error("unknown action " .. tostring(op), 0)
+	end
+	if saved and itemsTab().displayItem == item then
+		for _, name in ipairs({ "prefixes", "suffixes" }) do
+			for i, affix in ipairs(saved[name]) do
+				item[name][i] = affix
+			end
+		end
+		item:Craft()
+		itemsTab():UpdateAffixControls()
+		itemsTab():UpdateDisplayItemTooltip()
 	end
 	return finish()
 end

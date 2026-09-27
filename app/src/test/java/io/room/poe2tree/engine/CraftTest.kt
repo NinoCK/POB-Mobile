@@ -13,7 +13,7 @@ class CraftTest {
     private val api get() = EngineTestSupport.api
 
     private fun controls(rows: JSONArray): List<JSONObject> =
-        (0 until rows.length()).flatMap { r -> rows.getJSONArray(r).let { row -> (0 until row.length()).map { row.getJSONObject(it) } } }
+        (0 until rows.length()).flatMap { r -> rows.getJSONObject(r).getJSONArray("controls").let { row -> (0 until row.length()).map { row.getJSONObject(it) } } }
 
     private fun editor(state: JSONObject) = controls(state.getJSONArray("rows"))
     private fun popup(state: JSONObject) = controls(state.getJSONObject("popup").getJSONArray("rows"))
@@ -53,21 +53,9 @@ class CraftTest {
         println(itemLines(state))
         assertTrue(itemLines(state).any { it.contains("Test Amulet") })
 
-        // First affix: pick an option, then roll it to the top of its range
-        val affix = find(editor(state), "displayItemAffix1")!!
-        assertEquals("dropdown", affix.getString("kind"))
-        assertTrue(affix.getJSONArray("options").length() > 2)
-        println("affix 1: ${affix.getJSONArray("options").length()} options, e.g. ${affix.getJSONArray("options").getString(1)}")
-        val detail = api.callArray("craftDetail", JSONObject().put("target", "editor").put("name", "displayItemAffix1").put("index", 2))
-        println("detail: $detail")
-        state = action("editor", "displayItemAffix1", "select", 2)
-        val withAffix = itemLines(state)
-        println(withAffix)
-        val range = find(editor(state), "displayItemAffixRange1")
-        if (range != null) {
-            state = action("editor", "displayItemAffixRange1", "value", 1.0)
-            println("rolled high: ${itemLines(state)}")
-        }
+        // The affixes are the app's own (CraftModsTest); PoB's affix controls are not listed
+        assertTrue(editor(state).none { it.getString("name").startsWith("displayItemAffix") })
+        assertTrue(state.getJSONObject("model").getInt("prefixLimit") > 0)
 
         // Add modifier: a custom line
         state = action("editor", "displayItemAddCustom", "click")

@@ -130,7 +130,11 @@ data class ItemSlot(
     val candidates: List<Int>,
 )
 
-data class ItemInfo(val id: Int, val name: String, val base: String?, val type: String?, val rarity: String?, val equipped: List<String>)
+data class ItemInfo(
+    val id: Int, val name: String, val title: String?, val base: String?, val type: String?, val rarity: String?, val equipped: List<String>,
+    /** The rune (or soul core, talisman, ...) in each of the item's sockets, "" for an empty one. */
+    val sockets: List<String> = emptyList(),
+)
 data class ItemSetInfo(val id: Int, val title: String)
 
 data class ItemsData(
@@ -166,20 +170,92 @@ data class CraftControl(
     val detail: Boolean,
 )
 
-data class CraftPopup(val title: String, val rows: List<List<CraftControl>>)
+/** A row of PoB's controls, and the part of the crafting screen it belongs to ("actions", "variants", "properties", "enchant", "sockets", "modifiers" or "popup"). */
+data class CraftRow(val section: String, val controls: List<CraftControl>)
 
-/** PoB's item editor: the item being crafted or edited (null when none) and its controls. */
+data class CraftPopup(val title: String, val rows: List<CraftRow>)
+
+/** PoB's item editor: the item being crafted or edited (null when none), its controls and modifiers. */
 data class CraftState(
     val lines: List<TooltipLine>?,
     val editing: Boolean,
-    val rows: List<List<CraftControl>>,
+    val rows: List<CraftRow>,
     val popup: CraftPopup?,
+    val model: CraftModel?,
 ) {
     val open get() = lines != null || popup != null
+    fun section(name: String) = rows.filter { it.section == name }
 }
 
+/** A tier of a modifier family (1 = best), with its lines as PoB lists them ("+(200-214) to maximum Life"). */
+data class ModTier(val modId: String, val tier: Int, val level: Int, val name: String, val lines: List<String>, val available: Boolean)
+
+/** A rolled value of a crafted modifier: the range and the roll (0..1) giving [value]. */
+data class AffixValue(val line: Int, val min: Double, val max: Double, val decimals: Int, val roll: Double, val value: Double)
+
+/** A prefix or suffix slot of a crafted item (empty when [modId] is null). */
+data class AffixSlot(
+    val index: Int,
+    val type: String,
+    val modId: String?,
+    val source: String?,
+    val sourceLabel: String?,
+    /** The family's text over all tiers, or the essence's name */
+    val label: String?,
+    val name: String?,
+    val tier: Int?,
+    val tiers: List<ModTier>,
+    val level: Int,
+    val lines: List<String>,
+    val values: List<AffixValue>,
+    val fractured: Boolean,
+) {
+    val empty get() = modId == null
+}
+
+/** A modifier family that can fill a slot: the tiers of one modifier from one source. */
+data class ModFamily(
+    val key: String,
+    val source: String,
+    val sourceLabel: String,
+    val label: String,
+    val text: String,
+    val influence: String?,
+    val tags: List<String>,
+    val tiers: List<ModTier>,
+) {
+    /** The best tier the item level allows (the best one without an item level). */
+    val bestAvailable get() = tiers.firstOrNull { it.available } ?: tiers.first()
+}
+
+/** A modifier line outside the crafted affixes (custom lines, or all lines of an item that is not crafted). */
+data class ExtraLine(val index: Int, val text: String, val custom: Boolean)
+
+/** One of PoB's range lines (implicits, uniques' modifiers...): one roll for its values. */
+data class RangeLine(val index: Int, val text: String, val roll: Double, val values: List<AffixValue>, val kind: String)
+
+/** The crafting model of the item in the editor (engine/api/CraftMods.lua). */
+data class CraftModel(
+    val rarity: String,
+    val title: String?,
+    val baseName: String,
+    val itemLevel: Int?,
+    val crafted: Boolean,
+    val unique: Boolean,
+    val canSetRarity: Boolean,
+    val magicOnly: Boolean,
+    val requiredLevel: Int,
+    val prefixLimit: Int,
+    val suffixLimit: Int,
+    val prefixes: List<AffixSlot>,
+    val suffixes: List<AffixSlot>,
+    val extra: List<ExtraLine>,
+    val ranges: List<RangeLine>,
+    val convertible: Boolean,
+)
+
 /** A unique or rare template from PoB's item databases. */
-data class DbItem(val name: String, val base: String?, val type: String?)
+data class DbItem(val name: String, val title: String?, val base: String?, val type: String?, val rarity: String?)
 
 object ScreenJson {
 
@@ -362,18 +438,21 @@ object ScreenJson {
             ItemInfo(
                 id = it.optInt("id"),
                 name = it.optString("name"),
+                title = it.optStringOrNull("title"),
                 base = it.optStringOrNull("base"),
                 type = it.optStringOrNull("type"),
                 rarity = it.optStringOrNull("rarity"),
                 equipped = it.optJSONArray("equipped")?.strings().orEmpty(),
+                sockets = it.optJSONArray("sockets")?.strings().orEmpty(),
             )
         },
     )
 
-    private fun craftRows(arr: JSONArray?): List<List<CraftControl>> = arr?.let { rows ->
+    private fun craftRows(arr: JSONArray?): List<CraftRow> = arr?.let { rows ->
         (0 until rows.length()).map { r ->
-            val row = rows.getJSONArray(r)
-            (0 until row.length()).map { i ->
+            val o = rows.getJSONObject(r)
+            val row = o.optJSONArray("controls") ?: JSONArray()
+            CraftRow(o.optString("section"), (0 until row.length()).map { i ->
                 val c = row.getJSONObject(i)
                 CraftControl(
                     name = c.optString("name"),
@@ -391,7 +470,7 @@ object ScreenJson {
                     state = c.optBoolean("state"),
                     detail = c.optBoolean("detail"),
                 )
-            }
+            })
         }
     }.orEmpty()
 
@@ -403,11 +482,94 @@ object ScreenJson {
             editing = item?.optBoolean("editing") ?: false,
             rows = craftRows(o.optJSONArray("rows")),
             popup = popup?.let { CraftPopup(it.optString("title"), craftRows(it.optJSONArray("rows"))) },
+            model = o.optJSONObject("model")?.let { craftModel(it) },
+        )
+    }
+
+    private fun modTier(t: JSONObject) = ModTier(
+        modId = t.optString("modId"),
+        tier = t.optInt("tier", 1),
+        level = t.optInt("level"),
+        name = t.optString("name"),
+        lines = t.optJSONArray("lines")?.strings().orEmpty(),
+        available = t.optBoolean("available", true),
+    )
+
+    private fun affixValue(v: JSONObject) = AffixValue(
+        line = v.optInt("line", 1),
+        min = v.optDouble("min", 0.0),
+        max = v.optDouble("max", 0.0),
+        decimals = v.optInt("decimals"),
+        roll = v.optDouble("roll", 0.5),
+        value = v.optDouble("value", 0.0),
+    )
+
+    private fun affixSlot(s: JSONObject) = AffixSlot(
+        index = s.optInt("index", 1),
+        type = s.optString("type"),
+        modId = s.optStringOrNull("modId"),
+        source = s.optStringOrNull("source"),
+        sourceLabel = s.optStringOrNull("sourceLabel"),
+        label = s.optStringOrNull("label"),
+        name = s.optStringOrNull("name"),
+        tier = s.intOrNull("tier"),
+        tiers = s.objects("tiers").map { modTier(it) },
+        level = s.optInt("level"),
+        lines = s.optJSONArray("lines")?.strings().orEmpty(),
+        values = s.objects("values").map { affixValue(it) },
+        fractured = s.optBoolean("fractured"),
+    )
+
+    fun craftModel(o: JSONObject) = CraftModel(
+        rarity = o.optString("rarity"),
+        title = o.optStringOrNull("title"),
+        baseName = o.optString("baseName"),
+        itemLevel = o.intOrNull("itemLevel"),
+        crafted = o.optBoolean("crafted"),
+        unique = o.optBoolean("unique"),
+        canSetRarity = o.optBoolean("canSetRarity"),
+        magicOnly = o.optBoolean("magicOnly"),
+        requiredLevel = o.optInt("requiredLevel"),
+        prefixLimit = o.optInt("prefixLimit"),
+        suffixLimit = o.optInt("suffixLimit"),
+        prefixes = o.objects("prefixes").map { affixSlot(it) },
+        suffixes = o.objects("suffixes").map { affixSlot(it) },
+        extra = o.objects("extra").map { ExtraLine(it.optInt("index"), it.optString("text"), it.optBoolean("custom")) },
+        ranges = o.objects("ranges").map { r ->
+            val roll = r.optDouble("roll", 0.5)
+            RangeLine(
+                index = r.optInt("index"),
+                text = r.optString("text"),
+                roll = roll,
+                values = r.objects("values").map { v ->
+                    val min = v.optDouble("min", 0.0)
+                    val max = v.optDouble("max", 0.0)
+                    AffixValue(1, min, max, v.optInt("decimals"), roll, min + roll * (max - min))
+                },
+                kind = r.optString("kind"),
+            )
+        },
+        convertible = o.optBoolean("convertible"),
+    )
+
+    fun modFamilies(arr: JSONArray): List<ModFamily> = (0 until arr.length()).map { i ->
+        val f = arr.getJSONObject(i)
+        ModFamily(
+            key = f.optString("key"),
+            source = f.optString("source"),
+            sourceLabel = f.optString("sourceLabel"),
+            label = f.optString("label"),
+            text = f.optString("text"),
+            influence = f.optStringOrNull("influence"),
+            tags = f.optJSONArray("tags")?.strings().orEmpty(),
+            tiers = f.objects("tiers").map { modTier(it) },
         )
     }
 
     fun dbItems(arr: JSONArray) = (0 until arr.length()).map { i ->
-        arr.getJSONObject(i).let { DbItem(it.optString("name"), it.optStringOrNull("base"), it.optStringOrNull("type")) }
+        arr.getJSONObject(i).let {
+            DbItem(it.optString("name"), it.optStringOrNull("title"), it.optStringOrNull("base"), it.optStringOrNull("type"), it.optStringOrNull("rarity"))
+        }
     }
 
     fun itemTooltip(o: JSONObject) = ItemTooltip(

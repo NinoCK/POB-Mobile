@@ -56,13 +56,27 @@ so the numbers are PoB's. The screens follow PoB's tabs:
   for its breakdown.
 - **Skills**: socket groups and gems with PoB's active / inactive reasons; enable, Full DPS, main
   skill, weapon sets, labels; gem level / quality / enabled; add gems (search), remove gems, paste
-  groups in PoB's text format, skill sets.
-- **Items**: item and weapon sets, every slot with PoB's item tooltips (including "Equipping /
+  groups in PoB's text format, skill sets. Gems show the game's icons.
+- **Items**: the game's item art (uniques' own art, the base's for other items) in the slots,
+  lists and tooltips; item and weapon sets, every slot with PoB's item tooltips (including "Equipping /
   Removing this item will give you"), flask / charm activation, changing and unequipping items,
-  adding items pasted from the game or from PoB, deleting items. PoB's item editor: craft an item
-  (rarity, type, base, prefixes and suffixes with their tiers and rolls, runes, quality, "Add
-  modifier" with crafted / essence / custom lines, anoint, corrupt), take one from PoB's uniques or
-  rare templates (variants and rolls), or edit an item of the build.
+  adding items pasted from the game or from PoB, deleting items. Crafting, on PoB's item editor:
+  - a new item (type, base, rarity), one of PoB's uniques or rare templates (variants and rolls), or
+    an item of the build; the rarity (normal / magic / rare), name and item level can be changed;
+  - prefixes and suffixes up to the item's limits (including "+1 Prefix Modifier allowed" and the
+    like), each chosen from every source PoB has data for: the base's regular modifiers, essences
+    (the tiers are the essences, Lesser to Perfect), desecrated modifiers, rune-influenced
+    modifiers, the item class's other modifiers, or any modifier of the item's table. The picker
+    searches modifiers, tiers and tags, shows each tier's values and item level (greyed above the
+    item's level), PoB's stat changes for a tier, and sorts by any of PoB's statistics (the change
+    of Full DPS, Life...);
+  - on each prefix / suffix: the tier, a roll for each value with its exact number, best / worst
+    rolls, fractured;
+  - an item pasted from the game or imported (plain lines) can be turned into prefixes and
+    suffixes: its lines are matched to modifiers, tiers and rolls, and lines that match none stay
+    as custom lines;
+  - custom text lines and PoB's "Add modifier" lists, the rolls of implicits and unique modifiers,
+    runes and soul cores, quality and catalysts, anoints and corruption (PoB's popups).
 - **Calcs**: the Calcs tab's own skill selection and calculation mode, all sections, and PoB's
   breakdowns of each value (formulas and modifier tables with their sources; a passive listed as a
   source can be shown on the tree).
@@ -107,7 +121,7 @@ Unit tests (the real tree data and the real engine; Windows, see below):
 | `native/host/win-x64` | Desktop build of the bridge for the unit tests, and `luajit.exe` |
 | `app/src/main/assets/pob` | Path of Building's Lua program and data (from `tools/build_pob_assets.py`) |
 | `app/src/main/assets/engine/Host.lua` | Runs PoB headless (like PoB's `HeadlessWrapper.lua`) |
-| `app/src/main/assets/engine/Api.lua`, `api/*.lua` | The app's API over PoB's objects, returning JSON (`Craft.lua` drives PoB's item editor controls and popups, `Power.lua` runs PoB's node power builder in steps) |
+| `app/src/main/assets/engine/Api.lua`, `api/*.lua` | The app's API over PoB's objects, returning JSON (`Craft.lua` drives PoB's item editor controls and popups, `CraftMods.lua` is the crafting model: modifier pools by source, tiers, rolls, conversion of pasted items; `Power.lua` runs PoB's node power builder in steps) |
 | `engine/*.kt` | JNI bindings, the engine thread, the open build's session and data models |
 
 LuaJIT runs as an interpreter (`jit.off()` in `Host.lua`): PoB's code is branchy and short-running,
@@ -122,6 +136,10 @@ affecting the calculations:
   headless stub made PoB shorten some labels to "...").
 - The Skills tab's undo states (`Api.lua`) leave out the skill data rebuilt at every calculation
   (0.6 MB per state otherwise), and a new build starts its tabs' undo history like a loaded one.
+- Crafting (`CraftMods.lua`): the item classes' modifier tables also find desecrated modifiers by
+  id (so a crafted prefix / suffix can be one; PoB's own lists are unchanged), and `Item:Craft`
+  also takes a roll for each value of a modifier and marks desecrated modifiers. It only runs in
+  the item editor; items are calculated from their lines as before.
 
 The app's pathing is a port of PoB's (`tree/PassiveSpec.kt`), including the jewels that change it;
 the engine describes the build's jewels (`api.treeOverlay`), and the unit tests check that PoB
@@ -176,6 +194,20 @@ the transparent padding newer texture arrays have, and packs node art into small
 fast drawing when zoomed out. Curved connections are drawn by bending the straight connector art
 along the orbit, so PoB's orbit arc images are not bundled.
 
+## Updating the item and gem icons
+
+The icons in `app/src/main/assets/icons` come from [poe2db](https://poe2db.tw/us/), downloaded by
+`../poe2db-assets/fetch_poe2db_assets.py` (see its README). With that download next to this folder:
+
+```bash
+python tools/build_icons.py
+```
+
+The script picks the icon of every item base and unique of the bundled Path of Building
+(`assets/pob/Data`) and of every gem and granted skill, scales item art down to 240 px, and writes
+`index.json` (folded names to files) for `ui/GameIcons.kt`. Run it again after updating Path of
+Building so new bases and uniques get their icons.
+
 ## Code layout
 
 | Path | Contents |
@@ -189,6 +221,7 @@ along the orbit, so PoB's orbit arc images are not bundled.
 | `io/BuildStore.kt` | Saved builds, point settings and each build's PoB data |
 | `ui/TreeRenderer.kt` | Tree drawing (PoB `PassiveTreeView.lua` draw order and colours) |
 | `ui/QuadBatch.kt`, `ui/SpriteCache.kt` | Batched sprite drawing, atlases and image loading |
+| `ui/GameIcons.kt` | Item and gem icons by name |
 | `ui/StatsScreen.kt`, `CalcsScreen.kt`, `SkillsScreen.kt`, `ItemsScreen.kt`, `ConfigScreen.kt` | PoB's tabs |
 | `ui/CraftEditor.kt` | PoB's item editor and its popups, drawn from the controls the engine reports |
 | `ui/HeatMap.kt` | Heat map settings and PoB's power report |
@@ -199,5 +232,6 @@ Not included: PoB's party and notes tabs, the trade site integration, and compar
 ## Licence notes
 
 Path of Building is MIT licensed, and LuaJIT is MIT licensed (`native/luajit/COPYRIGHT`). The passive
-tree art belongs to Grinding Gear Games; this app is intended for personal use and is not affiliated
-with Grinding Gear Games.
+tree, item and gem art belongs to Grinding Gear Games (the item and gem icons as published by poe2db,
+CC BY-NC-SA 3.0); this app is intended for personal use and is not affiliated with Grinding Gear
+Games.

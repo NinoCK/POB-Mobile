@@ -267,6 +267,60 @@ class CalcSession(
         api.callArray("craftDetail", JSONObject().put("target", if (popup) "popup" else "editor").put("name", name).put("index", index)).strings()
     }
 
+    // The app's crafting model (engine/api/CraftMods.lua): slot is "prefix" or "suffix"
+
+    private fun slotArgs(slot: String, index: Int) = JSONObject().put("slot", slot).put("index", index)
+
+    private fun JSONObject.putRolls(rolls: List<Double>?): JSONObject {
+        if (!rolls.isNullOrEmpty()) put("ranges", JSONArray().apply { rolls.forEach { put(it) } })
+        return this
+    }
+
+    /** Puts a modifier into a slot (null [modId] empties it), with a roll for each of its values. */
+    suspend fun craftSetAffix(slot: String, index: Int, modId: String?, rolls: List<Double>?, fractured: Boolean) = craftCall(
+        "craftSetAffix",
+        slotArgs(slot, index).put("modId", modId ?: "None").putRolls(rolls).put("fractured", fractured),
+    )
+
+    /** Rarity ("NORMAL", "MAGIC", "RARE"), name or item level (0 clears it) of the item. */
+    suspend fun craftSetItem(rarity: String? = null, title: String? = null, itemLevel: Int? = null) = craftCall(
+        "craftSetItem",
+        JSONObject().apply {
+            if (rarity != null) put("rarity", rarity)
+            if (title != null) put("title", title)
+            if (itemLevel != null) put("itemLevel", itemLevel)
+        },
+    )
+
+    suspend fun craftSetRange(index: Int, roll: Double) = craftCall("craftSetRange", JSONObject().put("index", index).put("range", roll))
+    suspend fun craftRemoveLine(index: Int) = craftCall("craftRemoveLine", JSONObject().put("index", index))
+    suspend fun craftAddLine(text: String) = craftCall("craftAddLine", JSONObject().put("text", text))
+    /** Turns an item's modifier lines into crafted prefixes and suffixes. */
+    suspend fun craftConvert() = craftCall("craftConvert")
+
+    /** The modifier families that can fill a slot ([any]: every modifier of the item class too). */
+    suspend fun craftPool(slot: String, index: Int, any: Boolean): List<ModFamily>? = read { api ->
+        ScreenJson.modFamilies(api.callObject("craftPool", slotArgs(slot, index).put("any", any)).getJSONArray("families"))
+    }
+
+    /** PoB's stat changes of putting a modifier into a slot. */
+    suspend fun craftPreview(slot: String, index: Int, modId: String?, rolls: List<Double>?): List<String>? = read { api ->
+        api.callArray("craftPreview", slotArgs(slot, index).put("modId", modId ?: "None").putRolls(rolls)).strings()
+    }
+
+    /** Statistics the modifiers can be sorted by: (label, stat). */
+    suspend fun craftSortStats(): List<Pair<String, String>>? = read { api ->
+        val arr = api.callArray("craftSortStats")
+        (0 until arr.length()).map { arr.getJSONObject(it).let { o -> o.optString("label") to o.optString("stat") } }
+    }
+
+    /** Change of [stat] for putting each of [modIds] into a slot at [roll]. */
+    suspend fun craftPoolValues(slot: String, index: Int, stat: String, modIds: List<String>, roll: Double): Map<String, Double>? = read { api ->
+        val args = slotArgs(slot, index).put("stat", stat).put("range", roll).put("modIds", JSONArray().apply { modIds.forEach { put(it) } })
+        val o = api.callObject("craftPoolValues", args)
+        o.keys().asSequence().associateWith { o.optDouble(it, 0.0) }
+    }
+
     suspend fun itemDB(kind: String, query: String): List<DbItem>? = read { api ->
         ScreenJson.dbItems(api.callArray("itemDB", JSONObject().put("kind", kind).put("query", query)))
     }

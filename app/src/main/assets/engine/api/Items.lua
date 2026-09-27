@@ -121,13 +121,21 @@ function api.items()
 	for _, id in ipairs(itemsTab.itemOrderList) do
 		local item = itemsTab.items[id]
 		if item then
+			-- The rune (or soul core, ...) in each of the item's sockets, "" when empty
+			local sockets = api.array()
+			for i = 1, item.itemSocketCount or 0 do
+				local rune = item.runes[i]
+				sockets[i] = rune and rune ~= "None" and rune or ""
+			end
 			result.items[#result.items + 1] = {
 				id = id,
 				name = itemLabel(item),
+				title = item.title,
 				base = item.baseName,
 				type = item.type,
 				rarity = item.rarity,
 				equipped = equippedIn[id] and api.array(equippedIn[id]) or api.array(),
+				sockets = sockets,
 			}
 		end
 	end
